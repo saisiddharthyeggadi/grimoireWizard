@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Grimoire Wizard PDF ingestion
 
 This first milestone ingests English PDFs into Supabase `pgvector`:
@@ -40,3 +41,7 @@ Run the tests with:
 ```powershell
 python -m pytest
 ```
+=======
+# grimoireWizard
+upload a text pdf, ask your question and get your answers. 
+>>>>>>> fd527366d23ca2fcf3d3185527c54e820ce9a076
