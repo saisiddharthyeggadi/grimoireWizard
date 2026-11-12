@@ -65,6 +65,7 @@ def build_chunk_records(
     *,
     similarity_threshold: float = 0.45,
     max_words: int = 300,
+    overlap_words: int = 0,
 ) -> tuple[str, list[dict[str, Any]], int]:
     document_id, checksum = _content_id(pdf_path)
     parsed_pages = parse_markdown_pages(pages)
@@ -76,6 +77,7 @@ def build_chunk_records(
             encoder.encode,
             similarity_threshold=similarity_threshold,
             max_words=max_words,
+            overlap_words=overlap_words,
         )
         for chunk in chunks:
             chunk_index = len(records)
@@ -136,6 +138,7 @@ def ingest_pdf(
     parser: Callable[[Path], list[str]] = parse_pdf_pages,
     similarity_threshold: float = 0.45,
     max_words: int = 300,
+    overlap_words: int = 0,
 ) -> dict[str, int | str]:
     if not pdf_path.is_file():
         raise FileNotFoundError(f"PDF file does not exist: {pdf_path}")
@@ -150,6 +153,7 @@ def ingest_pdf(
         active_encoder,
         similarity_threshold=similarity_threshold,
         max_words=max_words,
+        overlap_words=overlap_words,
     )
     upload_chunk_records(client, records)
     return {

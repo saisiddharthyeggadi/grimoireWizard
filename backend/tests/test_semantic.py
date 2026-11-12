@@ -1,3 +1,5 @@
+import pytest
+
 from grimoire_ingest.semantic import (
     Paragraph,
     build_semantic_chunks,
@@ -44,6 +46,46 @@ def test_respects_page_chapter_and_maximum_word_boundaries():
 
     assert [len(chunk.text.split()) for chunk in chunks] == [5, 2]
     assert all(chunk.page_number == 2 and chunk.chapter_number == 2 for chunk in chunks)
+
+
+def test_overlaps_chunks_without_exceeding_maximum_word_count():
+    paragraphs = [Paragraph("one two three four five six seven eight nine ten", 1, 1, 1)]
+
+    chunks = build_semantic_chunks(
+        paragraphs,
+        KeywordEncoder().encode,
+        similarity_threshold=-1.0,
+        max_words=5,
+        overlap_words=2,
+    )
+
+    assert [chunk.text.split() for chunk in chunks] == [
+        ["one", "two", "three", "four", "five"],
+        ["four", "five", "six", "seven", "eight"],
+        ["seven", "eight", "nine", "ten"],
+    ]
+    assert all(len(chunk.text.split()) <= 5 for chunk in chunks)
+
+
+def test_overlaps_semantic_boundaries_and_validates_overlap():
+    paragraphs = [
+        Paragraph("related one two", 1, 1, 1),
+        Paragraph("unrelated three four", 1, 2, 1),
+    ]
+
+    chunks = build_semantic_chunks(
+        paragraphs,
+        KeywordEncoder().encode,
+        max_words=5,
+        overlap_words=2,
+    )
+
+    assert [chunk.text.split() for chunk in chunks] == [
+        ["related", "one", "two"],
+        ["one", "two", "unrelated", "three", "four"],
+    ]
+    with pytest.raises(ValueError, match="overlap_words"):
+        build_semantic_chunks(paragraphs, KeywordEncoder().encode, max_words=5, overlap_words=5)
 
 
 def test_tracks_chapter_and_document_wide_paragraph_numbers_across_pages():

@@ -72,6 +72,25 @@ def test_chunk_records_include_required_metadata_and_384d_vectors(tmp_path):
     assert len(records[0]["embedding"]) == EMBEDDING_DIMENSIONS
 
 
+def test_build_chunk_records_passes_overlap_words_to_chunker(tmp_path):
+    pdf_path = tmp_path / "guide.pdf"
+    pdf_path.write_bytes(b"pdf bytes")
+
+    _, records, _ = build_chunk_records(
+        pdf_path,
+        ["one two three four five six seven eight nine ten"],
+        FixedEncoder(),
+        max_words=5,
+        overlap_words=2,
+    )
+
+    assert [record["content"].split() for record in records] == [
+        ["one", "two", "three", "four", "five"],
+        ["four", "five", "six", "seven", "eight"],
+        ["seven", "eight", "nine", "ten"],
+    ]
+
+
 def test_upload_batches_records_and_removes_stale_trailing_chunks():
     client = FakeClient()
     records = [

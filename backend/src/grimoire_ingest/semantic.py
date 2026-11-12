@@ -116,18 +116,43 @@ def _split_long_paragraph(paragraph: Paragraph, max_words: int) -> list[Paragrap
     ]
 
 
+def _suffix_units(paragraphs: Sequence[Paragraph], word_count: int) -> list[Paragraph]:
+    suffix: list[Paragraph] = []
+    remaining = word_count
+    for paragraph in reversed(paragraphs):
+        words = paragraph.text.split()
+        take = min(remaining, len(words))
+        if take:
+            suffix.append(
+                Paragraph(
+                    text=" ".join(words[-take:]),
+                    page_number=paragraph.page_number,
+                    paragraph_number=paragraph.paragraph_number,
+                    chapter_number=paragraph.chapter_number,
+                )
+            )
+            remaining -= take
+        if remaining == 0:
+            break
+    suffix.reverse()
+    return suffix
+
+
 def build_semantic_chunks(
     paragraphs: Sequence[Paragraph],
     encode: Encode,
     *,
     similarity_threshold: float = 0.45,
     max_words: int = 300,
+    overlap_words: int = 0,
 ) -> list[SemanticChunk]:
-    """Group adjacent paragraphs by cosine similarity, with a hard word limit."""
+    """Group adjacent paragraphs by similarity, with bounded word overlap."""
     if not -1.0 <= similarity_threshold <= 1.0:
         raise ValueError("similarity_threshold must be between -1 and 1.")
     if max_words < 1:
         raise ValueError("max_words must be at least 1.")
+    if not 0 <= overlap_words < max_words:
+        raise ValueError("overlap_words must be between 0 and max_words - 1.")
     if not paragraphs:
         return []
 
@@ -141,9 +166,20 @@ def build_semantic_chunks(
     groups: list[list[Paragraph]] = []
     current_group: list[Paragraph] = []
     current_words = 0
+    current_new_words = 0
+
+    def finish_group() -> None:
+        nonlocal current_group, current_words, current_new_words
+        if current_new_words == 0:
+            return
+        groups.append(current_group)
+        current_group = _suffix_units(current_group, overlap_words)
+        current_words = sum(_word_count(unit.text) for unit in current_group)
+        current_new_words = 0
+
     for index, unit in enumerate(units):
         split_for_semantics = False
-        if current_group:
+        if current_new_words:
             previous_vector = unit_vectors[index - 1]
             current_vector = unit_vectors[index]
             similarity = sum(a * b for a, b in zip(previous_vector, current_vector))
@@ -151,13 +187,34 @@ def build_semantic_chunks(
                 similarity < similarity_threshold
                 or current_group[-1].chapter_number != unit.chapter_number
             )
-        if current_group and (split_for_semantics or current_words + _word_count(unit.text) > max_words):
-            groups.append(current_group)
-            current_group = []
-            current_words = 0
-        current_group.append(unit)
-        current_words += _word_count(unit.text)
-    if current_group:
+        if split_for_semantics:
+            finish_group()
+
+        words = unit.text.split()
+        if current_new_words and current_words + len(words) > max_words:
+            finish_group()
+
+        offset = 0
+        while offset < len(words):
+            available_words = max_words - current_words
+            if available_words == 0:
+                finish_group()
+                available_words = max_words - current_words
+            take = min(available_words, len(words) - offset)
+            current_group.append(
+                Paragraph(
+                    text=" ".join(words[offset : offset + take]),
+                    page_number=unit.page_number,
+                    paragraph_number=unit.paragraph_number,
+                    chapter_number=unit.chapter_number,
+                )
+            )
+            current_words += take
+            current_new_words += take
+            offset += take
+            if offset < len(words):
+                finish_group()
+    if current_new_words:
         groups.append(current_group)
 
     chunk_texts = ["\n\n".join(unit.text for unit in group) for group in groups]
