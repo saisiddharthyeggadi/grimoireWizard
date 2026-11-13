@@ -24,8 +24,14 @@ Copy `.env.example` to `.env` in the `backend/` directory and set:
 ```dotenv
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-LLM_API_KEY=your-llm-api-key
+GEMINI_API_KEY=your-gemini-api-key
+LLM_MODEL=gemini-4-hydrogen
 ```
+
+The backend uses Gemini's OpenAI-compatible API endpoint and defaults to
+`gemini-4-hydrogen`. `LLM_MODEL` can select another Gemini model available to
+your API key. `GEMINI_API_KEY` is required; local and other LLM providers are
+not configured or supported.
 
 The service-role key bypasses row-level security: keep it private, and never put it in browser or mobile-client code.
 
@@ -70,11 +76,11 @@ can be ignored. Model and tokenizer downloads are expected on the first run.
 
 ## Conversation API
 
-The FastAPI application implements the MVP endpoints in
-`../project_decisions/backend_endpoints.md`. Apply both SQL migrations in
+The FastAPI application implements the conversation and PDF upload endpoints
+in `../project_decisions/backend_endpoints.md`. Apply both SQL migrations in
 `supabase/migrations/` to the same Supabase project used for ingestion. Start
 the API from this directory after setting `SUPABASE_URL`,
-`SUPABASE_SERVICE_ROLE_KEY`, and `LLM_API_KEY`:
+`SUPABASE_SERVICE_ROLE_KEY`, and `GEMINI_API_KEY`:
 
 ```bash
 uv sync --extra dev
@@ -82,12 +88,15 @@ uv run grimoire-api
 ```
 
 The API listens on `http://127.0.0.1:8000`; `/docs` provides the interactive
-OpenAPI schema. `LLM_BASE_URL` and `LLM_MODEL` can select an OpenAI-compatible
-provider/model. Set `API_CORS_ORIGINS` to a comma-separated list when the
-frontend runs on a different origin.
+OpenAPI schema. The backend connects only to Google's OpenAI-compatible Gemini
+endpoint; `LLM_MODEL` selects the Gemini model. Set `API_CORS_ORIGINS` to a
+comma-separated list when the frontend runs on a different origin.
 
-`POST /conversations` accepts an optional `title`. Attach an already-ingested
-document with `POST /conversations/{id}/documents` and a JSON `document_id`.
+`POST /documents` accepts a PDF multipart upload (maximum 50 MB), runs the
+existing ingestion pipeline, and returns its deterministic `document_id`,
+filename, and chunk counts. `POST /conversations` accepts an optional `title`.
+Attach an already-ingested document with
+`POST /conversations/{id}/documents` and a JSON `document_id`.
 `POST /conversations/{id}/messages` accepts `{ "content": "..." }` and streams
 Server-Sent Events (`status`, `token`, `citations`, `done`, or `error`). The
 conversation and message tables persist chat history; retrieval is restricted

@@ -61,6 +61,9 @@ GET /health	Liveness
 
 - `POST /conversations` accepts an optional JSON `title`; an empty body creates
   a conversation titled `New conversation`.
+- `POST /documents` accepts a PDF multipart upload (maximum 50 MB), processes
+  it with the existing ingestion pipeline, and returns its deterministic
+  document ID and ingestion counts.
 - `GET /conversations?limit=20&offset=0` returns `items`, `limit`, `offset`,
   and `has_more`.
 - Conversation details include attached `documents` with `id`, `filename`,
@@ -74,7 +77,7 @@ GET /health	Liveness
   `citations` has citation objects; `done` has `message_id` and `timings_ms`;
   `error` has `code`, `message`, and `retryable`.
 - Retrieval is scoped to the conversation's attached documents and combines
-  vector similarity with full-text ranking. Document IDs come from the
-  existing PDF ingestion pipeline; document upload is not part of this MVP API.
+  vector similarity with full-text ranking. The upload endpoint returns
+  document IDs from the existing PDF ingestion pipeline.
 - Apply both SQL migrations under `backend/supabase/migrations/` before running
   the API. Configure Supabase and LLM credentials in the backend environment.

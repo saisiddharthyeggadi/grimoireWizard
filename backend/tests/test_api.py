@@ -13,6 +13,7 @@ class FakeStore:
     def __init__(self):
         self.conversation_id = uuid4()
         self.document_id = uuid4()
+        self.client = object()
         self.messages = []
         self.attached = []
 
@@ -96,8 +97,7 @@ def _client(store=None, **options):
     settings = Settings(
         supabase_url="https://example.supabase.co",
         supabase_service_role_key="server-secret-placeholder",
-        llm_api_key="test-key",
-        llm_base_url=None,
+        gemini_api_key="test-key",
         llm_model="test-model",
     )
     return TestClient(
@@ -120,6 +120,106 @@ def test_health_and_conversation_creation():
     assert response.json()["title"] == "Research"
     assert empty_response.status_code == 201
     assert empty_response.json()["title"] == "New conversation"
+
+
+def test_settings_load_gemini_key_and_default_model(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    monkeypatch.setenv("LLM_API_URL", "http://localhost:1234/v1")
+    monkeypatch.setenv("LLM_BASE_URL", "https://legacy.example/v1")
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+
+    settings = Settings.from_environment()
+
+    assert settings.gemini_api_key == "gemini-test-key"
+    assert settings.llm_model == "gemini-4-hydrogen"
+
+
+def test_gemini_client_ignores_local_llm_url(monkeypatch):
+    observed = {}
+    store = FakeStore()
+    store.attach_document(store.conversation_id, store.document_id)
+    settings = Settings(
+        supabase_url="https://example.supabase.co",
+        supabase_service_role_key="server-secret-placeholder",
+        gemini_api_key="gemini-test-key",
+        llm_model="test-model",
+    )
+    llm_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FakeCompletions())
+    )
+
+    def fake_openai(*, api_key, base_url):
+        observed["api_key"] = api_key
+        observed["base_url"] = base_url
+        return llm_client
+
+    monkeypatch.setattr("grimoire_api.main.OpenAI", fake_openai)
+    client = TestClient(create_app(store=store, encoder=FakeEncoder(), settings=settings))
+
+    response = client.post(
+        f"/conversations/{store.conversation_id}/messages",
+        json={"content": "Question"},
+    )
+
+    assert response.status_code == 200
+    assert "event: done" in response.text
+    assert observed == {
+        "api_key": "gemini-test-key",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    }
+
+
+def test_upload_pdf_ingests_and_returns_document_details(monkeypatch):
+    observed = {}
+
+    def fake_ingest(pdf_path, client):
+        observed["filename"] = pdf_path.name
+        observed["content"] = pdf_path.read_bytes()
+        observed["client"] = client
+        return {
+            "document_id": "doc-id",
+            "pages": 2,
+            "paragraphs": 4,
+            "chunks": 3,
+        }
+
+    monkeypatch.setattr("grimoire_api.main.ingest_pdf", fake_ingest)
+    store = FakeStore()
+    response = _client(store).post(
+        "/documents",
+        files={"file": ("guide.pdf", b"%PDF-1.7 test content", "application/pdf")},
+    )
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "document_id": "doc-id",
+        "pages": 2,
+        "paragraphs": 4,
+        "chunks": 3,
+        "filename": "guide.pdf",
+        "status": "ready",
+    }
+    assert observed["filename"] == "guide.pdf"
+    assert observed["content"] == b"%PDF-1.7 test content"
+    assert observed["client"] is store.client
+
+
+def test_upload_pdf_rejects_non_pdf_files():
+    response = _client().post(
+        "/documents",
+        files={"file": ("guide.txt", b"not a pdf", "text/plain")},
+    )
+
+    assert response.status_code == 415
+
+
+def test_upload_pdf_rejects_invalid_pdf_content():
+    response = _client().post(
+        "/documents",
+        files={"file": ("guide.pdf", b"not a pdf", "application/pdf")},
+    )
+
+    assert response.status_code == 415
 
 
 def test_conversation_list_is_paginated():
@@ -192,8 +292,7 @@ def test_message_stream_reports_missing_llm_configuration():
     settings = Settings(
         supabase_url="https://example.supabase.co",
         supabase_service_role_key="server-secret-placeholder",
-        llm_api_key=None,
-        llm_base_url=None,
+        gemini_api_key=None,
         llm_model="test-model",
     )
     client = TestClient(create_app(store=store, settings=settings))

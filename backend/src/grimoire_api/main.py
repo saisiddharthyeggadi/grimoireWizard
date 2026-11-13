@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 import logging
 import math
+import shutil
+import tempfile
 import time
 from collections.abc import Iterator
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Query, Request, status
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from openai import OpenAI, OpenAIError, RateLimitError
@@ -17,12 +20,16 @@ from postgrest.exceptions import APIError
 from pydantic import BaseModel, Field
 from supabase import create_client
 
+from grimoire_ingest.pipeline import ingest_pdf
+
 from .config import Settings
 from .store import SupabaseConversationStore
 
 logger = logging.getLogger(__name__)
 EMBEDDING_DIMENSIONS = 384
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+MAX_PDF_UPLOAD_BYTES = 50 * 1024 * 1024
 
 
 class ConversationCreate(BaseModel):
@@ -70,9 +77,12 @@ def _get_llm_client(request: Request) -> OpenAI:
     if existing is not None:
         return existing
     settings: Settings = request.app.state.settings
-    if not settings.llm_api_key:
-        raise RuntimeError("Set LLM_API_KEY to enable conversation responses.")
-    client = OpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
+    if not settings.gemini_api_key:
+        raise RuntimeError("Set GEMINI_API_KEY to enable conversation responses.")
+    client = OpenAI(
+        api_key=settings.gemini_api_key,
+        base_url=GEMINI_BASE_URL,
+    )
     request.app.state.llm_client = client
     return client
 
@@ -279,6 +289,53 @@ def create_app(
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.post("/documents", status_code=status.HTTP_201_CREATED)
+    def upload_document(
+        request: Request, file: UploadFile = File(...)
+    ) -> dict[str, Any]:
+        filename = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+        if not filename or Path(filename).suffix.lower() != ".pdf":
+            raise HTTPException(status_code=415, detail="Upload a PDF file.")
+
+        file.file.seek(0, 2)
+        file_size = file.file.tell()
+        file.file.seek(0)
+        if file_size > MAX_PDF_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"PDF exceeds the {MAX_PDF_UPLOAD_BYTES // (1024 * 1024)} MB upload limit.",
+            )
+        if b"%PDF-" not in file.file.read(1024):
+            raise HTTPException(status_code=415, detail="The uploaded file is not a PDF.")
+        file.file.seek(0)
+
+        with tempfile.TemporaryDirectory(prefix="grimoire-upload-") as directory:
+            pdf_path = Path(directory) / filename
+            with pdf_path.open("wb") as destination:
+                shutil.copyfileobj(file.file, destination)
+            try:
+                result = ingest_pdf(pdf_path, _get_store(request).client)
+            except APIError as error:
+                logger.exception("Supabase failed to store uploaded PDF chunks.")
+                raise HTTPException(
+                    status_code=502,
+                    detail="Supabase could not store the PDF. Check the backend log.",
+                ) from error
+            except (OSError, TypeError, ValueError) as error:
+                logger.exception("The uploaded PDF could not be ingested.")
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Could not process this PDF: {error}",
+                ) from error
+            finally:
+                file.file.close()
+
+        return {
+            **result,
+            "filename": filename,
+            "status": "ready",
+        }
 
     @app.post("/conversations", status_code=status.HTTP_201_CREATED)
     def create_conversation(
