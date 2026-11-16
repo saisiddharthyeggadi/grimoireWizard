@@ -1,0 +1,186 @@
+{
+  "document": "../../test.pdf",
+  "source": "test.pdf",
+  "items": [
+    {
+      "id": "crypto-decentralization",
+      "question": "What feature does the book identify as most distinguishing cryptocurrencies from centrally controlled money?",
+      "search_query": "cryptocurrency decentralized networks central authority",
+      "answerable": true,
+      "expected_answer": "They generally operate on decentralized networks rather than being controlled by a central authority.",
+      "source_page": 6,
+      "source_passages": [27]
+    },
+    {
+      "id": "bitcoin-origin",
+      "question": "Which cryptocurrency is identified as the best-known, and when was it created?",
+      "search_query": "Bitcoin created year 2009",
+      "answerable": true,
+      "expected_answer": "Bitcoin is identified as the best-known cryptocurrency and is dated to 2009.",
+      "source_page": 6,
+      "source_passages": [28]
+    },
+    {
+      "id": "mining-purpose",
+      "question": "What does mining do in the cryptocurrency process described in the introduction?",
+      "search_query": "mining validate record transactions blockchain reward",
+      "answerable": true,
+      "expected_answer": "Computing work is used to validate and record blockchain transactions, with cryptocurrency rewards given to miners.",
+      "source_page": 6,
+      "source_passages": [29]
+    },
+    {
+      "id": "bitcoin-pseudonym",
+      "question": "What pseudonym is associated with Bitcoin's creator?",
+      "search_query": "Bitcoin creator pseudonym Satoshi Nakamoto",
+      "answerable": true,
+      "expected_answer": "The creator used the name Satoshi Nakamoto.",
+      "source_page": 12,
+      "source_passages": [65]
+    },
+    {
+      "id": "bitcoin-pizza",
+      "question": "What was the first real-world purchase with Bitcoin described in the book?",
+      "search_query": "first real world Bitcoin purchase two pizzas 10000",
+      "answerable": true,
+      "expected_answer": "A programmer bought two pizzas for 10,000 bitcoins in May 2010.",
+      "source_page": 13,
+      "source_passages": [71]
+    },
+    {
+      "id": "altcoin-purpose",
+      "question": "Why did alternative cryptocurrencies begin to emerge after Bitcoin?",
+      "search_query": "altcoins emerged improve upon Bitcoin different features",
+      "answerable": true,
+      "expected_answer": "They were created to offer improvements on Bitcoin or provide different features.",
+      "source_page": 17,
+      "source_passages": [90]
+    },
+    {
+      "id": "proof-of-stake",
+      "question": "What advantage of Proof of Stake over Proof of Work is mentioned?",
+      "search_query": "Proof of Stake energy efficient alternative Proof of Work",
+      "answerable": true,
+      "expected_answer": "Proof of Stake is described as a more energy-efficient alternative.",
+      "source_page": 18,
+      "source_passages": [95]
+    },
+    {
+      "id": "dao-attack",
+      "question": "What kind of weakness is given as a factor in the 2016 DAO attack?",
+      "search_query": "DAO attack 2016 smart contract code vulnerabilities",
+      "answerable": true,
+      "expected_answer": "Vulnerabilities or inaccuracies in smart-contract code can be exploited and were cited in connection with the DAO attack.",
+      "source_page": 24,
+      "source_passages": [132]
+    },
+    {
+      "id": "phishing-risk",
+      "question": "How can phishing and social engineering harm cryptocurrency users?",
+      "search_query": "phishing social engineering private keys fraudulent addresses",
+      "answerable": true,
+      "expected_answer": "They can trick users into disclosing private keys or sending funds to fraudulent addresses.",
+      "source_page": 24,
+      "source_passages": [135]
+    },
+    {
+      "id": "ico-definition",
+      "question": "How does the book define an Initial Coin Offering?",
+      "search_query": "ICO definition startups sell tokens early supporters money",
+      "answerable": true,
+      "expected_answer": "A project sells some of its new tokens to early supporters in exchange for funding.",
+      "source_page": 29,
+      "source_passages": [159]
+    },
+    {
+      "id": "ico-regulation-risk",
+      "question": "What risk accompanied the initially limited regulation of ICOs?",
+      "search_query": "initial ICO regulation innovation fundraising scams fraud",
+      "answerable": true,
+      "expected_answer": "The lack of regulation enabled rapid experimentation and fundraising but also left the area vulnerable to scams and fraud.",
+      "source_page": 30,
+      "source_passages": [165]
+    },
+    {
+      "id": "ponzi-returns",
+      "question": "In the described crypto Ponzi scheme, where do early investors' high returns come from?",
+      "search_query": "crypto Ponzi early investor returns later contributions not profits",
+      "answerable": true,
+      "expected_answer": "They are paid from money contributed by newer participants, not from legitimate investment profits.",
+      "source_page": 34,
+      "source_passages": [197]
+    },
+    {
+      "id": "cross-border-ransomware-payments",
+      "question": "What feature of cryptocurrency can make cross-border ransomware payments easier?",
+      "search_query": "ransomware cryptocurrency cross border payments banking oversight",
+      "answerable": true,
+      "expected_answer": "Borderless transfers can move value without the same traditional banking oversight and checks.",
+      "source_page": 39,
+      "source_passages": [230]
+    },
+    {
+      "id": "wallet-pseudonymity",
+      "question": "What does pseudonymity mean for cryptocurrency wallet transactions in the money-laundering discussion?",
+      "search_query": "wallet pseudonymity transactions owner identity not revealed",
+      "answerable": true,
+      "expected_answer": "Transactions between wallets may not reveal the real-world identities of their owners.",
+      "source_page": 45,
+      "source_passages": [259]
+    },
+    {
+      "id": "privacy-coins",
+      "question": "Which privacy-focused cryptocurrencies are named as examples in the terrorism-financing discussion?",
+      "search_query": "privacy focused cryptocurrency examples Monero Zcash",
+      "answerable": true,
+      "expected_answer": "Monero and Zcash are given as examples.",
+      "source_page": 51,
+      "source_passages": [296]
+    },
+    {
+      "id": "mica-goal",
+      "question": "What goals does the book attribute to the EU's proposed MiCA regulation?",
+      "search_query": "EU MiCA goals legal clarity consumer protection innovation",
+      "answerable": true,
+      "expected_answer": "It aims to provide legal clarity and consumer protection while supporting innovation.",
+      "source_page": 56,
+      "source_passages": [326]
+    },
+    {
+      "id": "iot-ai-security",
+      "question": "Which technologies are discussed together as a possible way to improve connected-device security?",
+      "search_query": "IoT artificial intelligence blockchain data security integration",
+      "answerable": true,
+      "expected_answer": "The discussion describes integrating blockchain with the Internet of Things and artificial intelligence.",
+      "source_page": 62,
+      "source_passages": [363]
+    },
+    {
+      "id": "innovation-consumer-protection",
+      "question": "What two objectives must be balanced in the conclusion?",
+      "search_query": "balance innovation consumer protection regulation cryptocurrency",
+      "answerable": true,
+      "expected_answer": "Encouraging innovation while protecting consumers and addressing associated risks.",
+      "source_page": 67,
+      "source_passages": [388, 390]
+    },
+    {
+      "id": "live-bitcoin-price",
+      "question": "What is Bitcoin's exact live USD price at the time this question is asked?",
+      "search_query": "exact live Bitcoin USD price now",
+      "answerable": false,
+      "expected_answer": null,
+      "source_page": null,
+      "source_passages": []
+    },
+    {
+      "id": "book-sales-count",
+      "question": "How many copies of this book had been sold by November 16, 2026?",
+      "search_query": "book sales copies sold by November 16 2026",
+      "answerable": false,
+      "expected_answer": null,
+      "source_page": null,
+      "source_passages": []
+    }
+  ]
+}

@@ -13,6 +13,15 @@ MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIMENSIONS = 384
 TABLE_NAME = "document_chunks"
 UPLOAD_BATCH_SIZE = 100
+MAX_PDF_UPLOAD_BYTES = 100 * 1024 * 1024
+MAX_PDF_PAGES = 1000
+
+
+def _pdf_page_count(pdf_path: Path) -> int:
+    import pymupdf
+
+    with pymupdf.open(pdf_path) as document:
+        return document.page_count
 
 
 def parse_pdf_pages(pdf_path: Path) -> list[str]:
@@ -70,6 +79,17 @@ def build_chunk_records(
     document_id, checksum = _content_id(pdf_path)
     parsed_pages = parse_markdown_pages(pages)
     records: list[dict[str, Any]] = []
+    tokenizer = getattr(encoder, "tokenizer", None)
+    max_tokens = getattr(encoder, "max_seq_length", None)
+    if (tokenizer is None) != (max_tokens is None):
+        raise TypeError(
+            "The embedding encoder must expose both tokenizer and max_seq_length."
+        )
+    token_count = (
+        lambda text: len(tokenizer.encode(text, add_special_tokens=True))
+        if tokenizer is not None
+        else None
+    )
 
     for page_paragraphs in parsed_pages:
         chunks = build_semantic_chunks(
@@ -78,6 +98,8 @@ def build_chunk_records(
             similarity_threshold=similarity_threshold,
             max_words=max_words,
             overlap_words=overlap_words,
+            max_tokens=max_tokens,
+            token_count=token_count if tokenizer is not None else None,
         )
         for chunk in chunks:
             chunk_index = len(records)
@@ -144,6 +166,11 @@ def ingest_pdf(
         raise FileNotFoundError(f"PDF file does not exist: {pdf_path}")
     if pdf_path.suffix.lower() != ".pdf":
         raise ValueError(f"Expected a .pdf file: {pdf_path}")
+    if pdf_path.stat().st_size > MAX_PDF_UPLOAD_BYTES:
+        raise ValueError("PDF exceeds the configured maximum file size.")
+    page_count = _pdf_page_count(pdf_path)
+    if page_count > MAX_PDF_PAGES:
+        raise ValueError("PDF exceeds the 1,000-page maximum.")
 
     pages = parser(pdf_path)
     active_encoder = encoder if encoder is not None else load_encoder()

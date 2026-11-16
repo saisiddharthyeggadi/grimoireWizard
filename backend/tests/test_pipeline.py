@@ -5,6 +5,7 @@ import pytest
 from grimoire_ingest.pipeline import (
     EMBEDDING_DIMENSIONS,
     build_chunk_records,
+    ingest_pdf,
     upload_chunk_records,
 )
 
@@ -91,6 +92,32 @@ def test_build_chunk_records_passes_overlap_words_to_chunker(tmp_path):
     ]
 
 
+def test_build_chunk_records_respects_encoder_tokenizer_limit(tmp_path):
+    class LimitedEncoder(FixedEncoder):
+        max_seq_length = 6
+
+        class Tokenizer:
+            def encode(self, text, add_special_tokens=True):
+                return [0, *text.split(), 1] if add_special_tokens else text.split()
+
+        tokenizer = Tokenizer()
+
+    pdf_path = tmp_path / "guide.pdf"
+    pdf_path.write_bytes(b"pdf bytes")
+
+    _, records, _ = build_chunk_records(
+        pdf_path,
+        ["one two three four five six seven eight"],
+        LimitedEncoder(),
+        overlap_words=1,
+    )
+
+    assert all(
+        len(LimitedEncoder.tokenizer.encode(record["content"])) <= 6
+        for record in records
+    )
+
+
 def test_upload_batches_records_and_removes_stale_trailing_chunks():
     client = FakeClient()
     records = [
@@ -115,3 +142,30 @@ def test_rejects_vectors_with_wrong_dimension(tmp_path):
 
     with pytest.raises(ValueError, match="expected 384"):
         build_chunk_records(pdf_path, ["A useful paragraph."], WrongDimensionEncoder())
+
+
+def test_ingestion_rejects_pdf_over_page_limit(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "guide.pdf"
+    pdf_path.write_bytes(b"pdf bytes")
+    parser_called = False
+
+    def parser(_path):
+        nonlocal parser_called
+        parser_called = True
+        return ["A useful paragraph."]
+
+    monkeypatch.setattr("grimoire_ingest.pipeline._pdf_page_count", lambda _path: 1001)
+
+    with pytest.raises(ValueError, match="1,000-page maximum"):
+        ingest_pdf(pdf_path, object(), parser=parser, encoder=FixedEncoder())
+
+    assert not parser_called
+
+
+def test_ingestion_rejects_pdf_over_file_size_limit(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "guide.pdf"
+    pdf_path.write_bytes(b"pdf bytes")
+    monkeypatch.setattr("grimoire_ingest.pipeline.MAX_PDF_UPLOAD_BYTES", 4)
+
+    with pytest.raises(ValueError, match="configured maximum file size"):
+        ingest_pdf(pdf_path, object(), encoder=FixedEncoder())

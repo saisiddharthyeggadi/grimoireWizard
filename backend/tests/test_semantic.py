@@ -88,6 +88,27 @@ def test_overlaps_semantic_boundaries_and_validates_overlap():
         build_semantic_chunks(paragraphs, KeywordEncoder().encode, max_words=5, overlap_words=5)
 
 
+def test_chunks_stay_within_token_budget_including_overlap():
+    paragraphs = [Paragraph("one two three four five six seven eight", 1, 1, 1)]
+    token_count = lambda text: len(text.split()) + 2
+
+    chunks = build_semantic_chunks(
+        paragraphs,
+        KeywordEncoder().encode,
+        max_words=20,
+        overlap_words=1,
+        max_tokens=6,
+        token_count=token_count,
+    )
+
+    assert all(token_count(chunk.text) <= 6 for chunk in chunks)
+    assert [chunk.text.split() for chunk in chunks] == [
+        ["one", "two", "three", "four"],
+        ["four", "five", "six", "seven"],
+        ["seven", "eight"],
+    ]
+
+
 def test_tracks_chapter_and_document_wide_paragraph_numbers_across_pages():
     pages = [
         "# Chapter IV: Beginnings\n\nFirst paragraph.",

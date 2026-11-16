@@ -21,15 +21,20 @@ from pydantic import BaseModel, Field
 from supabase import create_client
 
 from grimoire_ingest.pipeline import ingest_pdf
+from grimoire_ingest.pipeline import MAX_PDF_UPLOAD_BYTES
 
 from .config import Settings
+from .reranker import (
+    RERANKER_CANDIDATE_COUNT,
+    RERANKER_KEEP_COUNT,
+    rerank_chunks,
+)
 from .store import SupabaseConversationStore
 
 logger = logging.getLogger(__name__)
 EMBEDDING_DIMENSIONS = 384
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
-MAX_PDF_UPLOAD_BYTES = 50 * 1024 * 1024
 
 
 class ConversationCreate(BaseModel):
@@ -113,20 +118,33 @@ def _query_vector(encoder: Any, question: str) -> list[float]:
     return values
 
 
-def _rewrite_query(llm_client: OpenAI, model: str, question: str) -> str:
+def _rewrite_query(
+    llm_client: OpenAI,
+    model: str,
+    question: str,
+    history: list[dict[str, Any]],
+) -> str:
+    messages: list[dict[str, str]] = [
+        {
+            "role": "system",
+            "content": (
+                "Rewrite the user's latest question as a concise document-search query. "
+                "Use the prior conversation only to resolve references and preserve "
+                "important terms. Return only the query."
+            ),
+        }
+    ]
+    for message in history[-6:]:
+        role = message.get("role")
+        content = message.get("content")
+        if role in {"user", "assistant"} and isinstance(content, str) and content:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": question})
+
     response = llm_client.chat.completions.create(
         model=model,
         temperature=0,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Rewrite the user's question as a concise document-search query. "
-                    "Preserve named entities and important terms. Return only the query."
-                ),
-            },
-            {"role": "user", "content": question},
-        ],
+        messages=messages,
     )
     rewritten = response.choices[0].message.content
     if not rewritten or not rewritten.strip():
@@ -158,29 +176,37 @@ def _answer_stream(
     question: str,
     document_ids: list[UUID],
     encoder: Any,
+    history: list[dict[str, Any]],
+    reranker: Any | None,
 ) -> Iterator[str]:
     started = time.monotonic()
-    yield _sse("status", {"status": "rewriting"})
-    try:
-        rewritten_question = _rewrite_query(llm_client, settings.llm_model, question)
-    except RateLimitError:
-        logger.exception("The configured LLM rate limit was reached during query rewriting.")
-        yield _error_event(
-            "rate_limited", "The answer service is rate limited.", True
-        )
-        return
-    except OpenAIError:
-        logger.exception("The configured LLM could not rewrite the chat query.")
-        yield _error_event(
-            "llm_unavailable", "The answer service is unavailable.", True
-        )
-        return
-    except (IndexError, TypeError, ValueError):
-        logger.exception("The configured LLM returned an invalid rewritten query.")
-        yield _error_event(
-            "internal_error", "The query could not be processed.", False
-        )
-        return
+    rewritten_question = question
+    if history:
+        yield _sse("status", {"status": "rewriting"})
+        try:
+            rewritten_question = _rewrite_query(
+                llm_client, settings.llm_model, question, history
+            )
+        except RateLimitError:
+            logger.exception(
+                "The configured LLM rate limit was reached during query rewriting."
+            )
+            yield _error_event(
+                "rate_limited", "The answer service is rate limited.", True
+            )
+            return
+        except OpenAIError:
+            logger.exception("The configured LLM could not rewrite the chat query.")
+            yield _error_event(
+                "llm_unavailable", "The answer service is unavailable.", True
+            )
+            return
+        except (IndexError, TypeError, ValueError):
+            logger.exception("The configured LLM returned an invalid rewritten query.")
+            yield _error_event(
+                "internal_error", "The query could not be processed.", False
+            )
+            return
     try:
         query_embedding = _query_vector(encoder, rewritten_question)
     except (RuntimeError, TypeError, ValueError):
@@ -192,7 +218,12 @@ def _answer_stream(
 
     yield _sse("status", {"status": "retrieving"})
     try:
-        chunks = store.search_chunks(query_embedding, rewritten_question, document_ids)
+        chunks = store.search_chunks(
+            query_embedding,
+            rewritten_question,
+            document_ids,
+            limit=RERANKER_CANDIDATE_COUNT,
+        )
     except APIError:
         logger.exception("Document retrieval failed.")
         yield _error_event("internal_error", "Document retrieval failed.", True)
@@ -206,6 +237,21 @@ def _answer_stream(
         return
 
     yield _sse("status", {"status": "reranking"})
+    try:
+        chunks = rerank_chunks(
+            question,
+            chunks,
+            model=reranker,
+            keep_count=RERANKER_KEEP_COUNT,
+        )
+    except (OSError, RuntimeError, TypeError, ValueError):
+        logger.exception("The local cross-encoder could not rerank retrieved chunks.")
+        yield _error_event(
+            "reranker_unavailable",
+            "The local reranker is unavailable.",
+            True,
+        )
+        return
     citations = _make_citations(chunks)
     context = "\n\n".join(
         f"[{index + 1}] {chunk['content']}" for index, chunk in enumerate(chunks)
@@ -271,6 +317,7 @@ def create_app(
     store: SupabaseConversationStore | None = None,
     encoder: Any | None = None,
     llm_client: OpenAI | None = None,
+    reranker: Any | None = None,
     settings: Settings | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Grimoire Wizard API", version="0.1.0")
@@ -278,6 +325,7 @@ def create_app(
     app.state.store = store
     app.state.encoder = encoder
     app.state.llm_client = llm_client
+    app.state.reranker = reranker
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(app.state.settings.cors_origins),
@@ -405,6 +453,7 @@ def create_app(
             raise HTTPException(
                 status_code=409, detail="Attach a ready document before asking a question."
             )
+        history = list(store.get_messages(conversation_id))
         store.save_message(conversation_id, "user", question)
         settings: Settings = request.app.state.settings
         try:
@@ -437,6 +486,8 @@ def create_app(
                 question,
                 [UUID(document["id"]) for document in documents],
                 encoder,
+                history,
+                request.app.state.reranker,
             )
 
         return StreamingResponse(

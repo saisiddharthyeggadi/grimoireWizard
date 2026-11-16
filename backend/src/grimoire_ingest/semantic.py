@@ -5,6 +5,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 Encode = Callable[..., object]
+TokenCount = Callable[[str], int]
 
 
 @dataclass(frozen=True)
@@ -101,19 +102,54 @@ def _word_count(text: str) -> int:
     return len(text.split())
 
 
-def _split_long_paragraph(paragraph: Paragraph, max_words: int) -> list[Paragraph]:
+def _split_long_paragraph(
+    paragraph: Paragraph,
+    max_words: int,
+    max_tokens: int | None,
+    token_count: TokenCount | None,
+) -> list[Paragraph]:
     words = paragraph.text.split()
-    if len(words) <= max_words:
+    if len(words) <= max_words and (
+        max_tokens is None or token_count is None or token_count(paragraph.text) <= max_tokens
+    ):
         return [paragraph]
-    return [
-        Paragraph(
-            text=" ".join(words[index : index + max_words]),
-            page_number=paragraph.page_number,
-            paragraph_number=paragraph.paragraph_number,
-            chapter_number=paragraph.chapter_number,
+
+    split_paragraphs: list[Paragraph] = []
+    current_words: list[str] = []
+    for word in words:
+        word_tokens = token_count(word) if token_count is not None else 0
+        if max_tokens is not None and word_tokens > max_tokens:
+            raise ValueError("A single word exceeds the embedding model's token limit.")
+
+        candidate = " ".join([*current_words, word])
+        too_many_words = len(current_words) >= max_words
+        too_many_tokens = (
+            max_tokens is not None
+            and token_count is not None
+            and token_count(candidate) > max_tokens
         )
-        for index in range(0, len(words), max_words)
-    ]
+        if current_words and (too_many_words or too_many_tokens):
+            split_paragraphs.append(
+                Paragraph(
+                    text=" ".join(current_words),
+                    page_number=paragraph.page_number,
+                    paragraph_number=paragraph.paragraph_number,
+                    chapter_number=paragraph.chapter_number,
+                )
+            )
+            current_words = []
+        current_words.append(word)
+
+    if current_words:
+        split_paragraphs.append(
+            Paragraph(
+                text=" ".join(current_words),
+                page_number=paragraph.page_number,
+                paragraph_number=paragraph.paragraph_number,
+                chapter_number=paragraph.chapter_number,
+            )
+        )
+    return split_paragraphs
 
 
 def _suffix_units(paragraphs: Sequence[Paragraph], word_count: int) -> list[Paragraph]:
@@ -145,6 +181,8 @@ def build_semantic_chunks(
     similarity_threshold: float = 0.45,
     max_words: int = 300,
     overlap_words: int = 0,
+    max_tokens: int | None = None,
+    token_count: TokenCount | None = None,
 ) -> list[SemanticChunk]:
     """Group adjacent paragraphs by similarity, with bounded word overlap."""
     if not -1.0 <= similarity_threshold <= 1.0:
@@ -153,13 +191,17 @@ def build_semantic_chunks(
         raise ValueError("max_words must be at least 1.")
     if not 0 <= overlap_words < max_words:
         raise ValueError("overlap_words must be between 0 and max_words - 1.")
+    if max_tokens is not None and max_tokens < 1:
+        raise ValueError("max_tokens must be at least 1.")
+    if (max_tokens is None) != (token_count is None):
+        raise ValueError("max_tokens and token_count must be provided together.")
     if not paragraphs:
         return []
 
     units = [
         unit
         for paragraph in paragraphs
-        for unit in _split_long_paragraph(paragraph, max_words)
+        for unit in _split_long_paragraph(paragraph, max_words, max_tokens, token_count)
     ]
     unit_vectors = _vectors(encode, [unit.text for unit in units])
 
@@ -191,19 +233,45 @@ def build_semantic_chunks(
             finish_group()
 
         words = unit.text.split()
-        if current_new_words and current_words + len(words) > max_words:
-            finish_group()
-
         offset = 0
         while offset < len(words):
             available_words = max_words - current_words
             if available_words == 0:
-                finish_group()
-                available_words = max_words - current_words
+                if current_new_words:
+                    finish_group()
+                else:
+                    current_group = []
+                    current_words = 0
+                continue
+
             take = min(available_words, len(words) - offset)
+            while take:
+                piece = " ".join(words[offset : offset + take])
+                candidate_text = "\n\n".join(
+                    [*(group_unit.text for group_unit in current_group), piece]
+                )
+                if (
+                    max_tokens is None
+                    or token_count is None
+                    or token_count(candidate_text) <= max_tokens
+                ):
+                    break
+                take -= 1
+
+            if not take:
+                if current_new_words:
+                    finish_group()
+                elif current_group:
+                    current_group = []
+                    current_words = 0
+                else:
+                    raise ValueError("A chunk exceeds the embedding model's token limit.")
+                continue
+
+            piece = " ".join(words[offset : offset + take])
             current_group.append(
                 Paragraph(
-                    text=" ".join(words[offset : offset + take]),
+                    text=piece,
                     page_number=unit.page_number,
                     paragraph_number=unit.paragraph_number,
                     chapter_number=unit.chapter_number,

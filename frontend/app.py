@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 from typing import Any
 
-import streamlit as st
+import importlib
+
+st = importlib.import_module("streamlit")
 
 from api import BackendClient, BackendError
 

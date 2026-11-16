@@ -4,7 +4,7 @@ This milestone ingests English PDFs into Supabase `pgvector`:
 
 1. PyMuPDF4LLM extracts markdown page by page.
 2. Markdown paragraphs are embedded with `sentence-transformers/all-MiniLM-L6-v2`.
-3. Adjacent paragraphs are grouped when their cosine similarity meets the configured threshold, with a 300-word default maximum per chunk and configurable word overlap.
+3. Adjacent paragraphs are grouped when their cosine similarity meets the configured threshold, with a 300-word default maximum per chunk, configurable word overlap, and a hard token limit from the loaded embedding model's tokenizer and maximum sequence length.
 4. Each chunk embedding and its document, chapter, page, and paragraph metadata are upserted into Supabase.
 
 Chapter numbers are detected from headings such as `Chapter IV: ...` or `5. ...`. If a chapter heading is not found, `chapter_number` is `null`. Paragraph numbering is document-wide; each chunk stores its first paragraph number in the dedicated column and its last paragraph number in `metadata.paragraph_end`.
@@ -47,7 +47,7 @@ Optional controls:
 uv run grimoire-ingest "/c/path/to/document.pdf" --similarity-threshold 0.45 --max-words 300 --overlap-words 40
 ```
 
-`--overlap-words` repeats the end of one chunk at the start of the next. The repeated words count toward `--max-words`; the default overlap is `0`, preserving non-overlapping chunks. The overlap must be smaller than the maximum chunk size.
+`--overlap-words` repeats the end of one chunk at the start of the next. The repeated words count toward both `--max-words` and the embedding model's token limit; the default overlap is `0`, preserving non-overlapping chunks. The overlap must be smaller than the maximum chunk size.
 
 The document ID is deterministic for the PDF's exact bytes, so re-ingesting the same file upserts the same chunks. A changed PDF receives a new ID; the previous version remains in the table and can be removed by its `document_id` when desired. The embedding model may be downloaded the first time ingestion runs.
 

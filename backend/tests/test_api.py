@@ -3,10 +3,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from grimoire_api.config import Settings
-from grimoire_api.main import create_app
+from grimoire_api.main import _rewrite_query, create_app
+from grimoire_api.reranker import RERANKER_CANDIDATE_COUNT, rerank_chunks
 
 
 class FakeStore:
@@ -16,6 +18,7 @@ class FakeStore:
         self.client = object()
         self.messages = []
         self.attached = []
+        self.search_limits = []
 
     def create_conversation(self, title):
         return {"id": str(self.conversation_id), "title": title or "New conversation"}
@@ -54,7 +57,8 @@ class FakeStore:
         self.messages.append(message)
         return message
 
-    def search_chunks(self, _embedding, _question, _document_ids):
+    def search_chunks(self, _embedding, _question, _document_ids, limit=8):
+        self.search_limits.append(limit)
         return [
             {
                 "chunk_id": 7,
@@ -73,7 +77,11 @@ class FakeEncoder:
 
 
 class FakeCompletions:
+    def __init__(self):
+        self.calls = []
+
     def create(self, **kwargs):
+        self.calls.append(kwargs)
         if not kwargs.get("stream"):
             return SimpleNamespace(
                 choices=[
@@ -93,6 +101,11 @@ class FakeCompletions:
         ]
 
 
+class FakeReranker:
+    def predict(self, pairs):
+        return [float(index) for index in range(len(pairs))]
+
+
 def _client(store=None, **options):
     settings = Settings(
         supabase_url="https://example.supabase.co",
@@ -104,6 +117,7 @@ def _client(store=None, **options):
         create_app(
             store=store or FakeStore(),
             settings=settings,
+            reranker=options.pop("reranker", FakeReranker()),
             **options,
         )
     )
@@ -154,7 +168,14 @@ def test_gemini_client_ignores_local_llm_url(monkeypatch):
         return llm_client
 
     monkeypatch.setattr("grimoire_api.main.OpenAI", fake_openai)
-    client = TestClient(create_app(store=store, encoder=FakeEncoder(), settings=settings))
+    client = TestClient(
+        create_app(
+            store=store,
+            encoder=FakeEncoder(),
+            reranker=FakeReranker(),
+            settings=settings,
+        )
+    )
 
     response = client.post(
         f"/conversations/{store.conversation_id}/messages",
@@ -254,8 +275,9 @@ def test_attach_document_requires_indexed_document():
 
 def test_message_endpoint_streams_and_persists_answer_and_citations():
     store = FakeStore()
+    completions = FakeCompletions()
     llm_client = SimpleNamespace(
-        chat=SimpleNamespace(completions=FakeCompletions())
+        chat=SimpleNamespace(completions=completions)
     )
     client = _client(store, encoder=FakeEncoder(), llm_client=llm_client)
     conversation_id = store.conversation_id
@@ -271,9 +293,103 @@ def test_message_endpoint_streams_and_persists_answer_and_citations():
     assert "event: token" in response.text
     assert "event: citations" in response.text
     assert "event: done" in response.text
+    assert '"status": "rewriting"' not in response.text
+    assert len(completions.calls) == 1
+    assert completions.calls[0]["stream"]
+    assert store.search_limits == [RERANKER_CANDIDATE_COUNT]
     assert [message["role"] for message in store.messages] == ["user", "assistant"]
     assert store.messages[-1]["citations"][0]["page"] == 2
     assert len(client.get(f"/conversations/{conversation_id}/messages").json()) == 2
+
+
+def test_follow_up_rewrite_uses_prior_conversation_messages():
+    store = FakeStore()
+    completions = FakeCompletions()
+    llm_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=completions)
+    )
+    client = _client(store, encoder=FakeEncoder(), llm_client=llm_client)
+    store.attach_document(store.conversation_id, store.document_id)
+
+    client.post(
+        f"/conversations/{store.conversation_id}/messages",
+        json={"content": "Tell me about Bitcoin and Ethereum."},
+    )
+    response = client.post(
+        f"/conversations/{store.conversation_id}/messages",
+        json={"content": "What about the second one?"},
+    )
+
+    rewrite_call = completions.calls[1]
+    assert response.status_code == 200
+    assert '"status": "rewriting"' in response.text
+    assert not rewrite_call.get("stream")
+    assert rewrite_call["messages"][-3:] == [
+        {"role": "user", "content": "Tell me about Bitcoin and Ethereum."},
+        {"role": "assistant", "content": "Follow the example [1]."},
+        {"role": "user", "content": "What about the second one?"},
+    ]
+
+
+def test_rewrite_query_includes_only_recent_user_and_assistant_history():
+    observed = {}
+
+    class CapturingCompletions:
+        def create(self, **kwargs):
+            observed.update(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="Bitcoin"))]
+            )
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=CapturingCompletions())
+    )
+    history = [
+        {"role": "system", "content": "ignore"},
+        *[
+            {"role": "user", "content": f"old question {index}"}
+            for index in range(7)
+        ],
+        {"role": "assistant", "content": "latest answer"},
+    ]
+
+    rewritten = _rewrite_query(client, "test-model", "What about it?", history)
+
+    assert rewritten == "Bitcoin"
+    assert observed["messages"][-7:] == [
+        *[
+            {"role": "user", "content": f"old question {index}"}
+            for index in range(2, 7)
+        ],
+        {"role": "assistant", "content": "latest answer"},
+        {"role": "user", "content": "What about it?"},
+    ]
+
+
+def test_rerank_chunks_keeps_highest_scoring_results():
+    chunks = [{"content": str(index)} for index in range(4)]
+
+    class ScoringModel:
+        def predict(self, pairs):
+            assert pairs == [["question", "0"], ["question", "1"], ["question", "2"], ["question", "3"]]
+            return [0.1, 0.9, 0.8, 0.7]
+
+    ranked = rerank_chunks("question", chunks, model=ScoringModel(), keep_count=3)
+
+    assert ranked == [chunks[1], chunks[2], chunks[3]]
+
+
+def test_rerank_chunks_rejects_invalid_scores():
+    class InvalidScoringModel:
+        def predict(self, _pairs):
+            return [float("nan")]
+
+    with pytest.raises(ValueError, match="non-finite"):
+        rerank_chunks(
+            "question",
+            [{"content": "chunk"}],
+            model=InvalidScoringModel(),
+        )
 
 
 def test_message_requires_an_attached_document():

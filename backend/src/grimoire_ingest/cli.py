@@ -13,7 +13,10 @@ from .pipeline import ingest_pdf
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Parse an English PDF, semantically chunk it, and upload embeddings to Supabase."
+        description=(
+            "Parse an English PDF (up to 100 MB and 1,000 pages), semantically "
+            "chunk it, and upload embeddings to Supabase."
+        )
     )
     parser.add_argument("pdf", type=Path, help="Path to the PDF file to ingest")
     parser.add_argument(
