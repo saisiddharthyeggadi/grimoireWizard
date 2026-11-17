@@ -1,0 +1,36 @@
+Simple fact lookup (single chunk)
+1. When was the Bitcoin genesis block mined, and what headline did it reference? Jan 3, 2009, “The Times 03/Jan/2009 Chancellor on brink of second bailout for banks” (p12)
+2. What did Laszlo Hanyecz buy with 10,000 bitcoins, and when? Two pizzas, May 2010 (p13)
+3. Who launched the Silk Road, and when did the FBI shut it down? Ross Ulbricht, launched Feb 2011, shut down Oct 2013 (p14-15)
+4. How much Bitcoin was lost in the Mt. Gox hack? About 850,000 BTC (~$450M at the time) (p25)
+5. How much did Colonial Pipeline pay in ransom? About $4.4 million in Bitcoin (p42)
+6. What ransom did the city of Baltimore refuse to pay? About $76,000 (p43)
+7. What ransom did REvil demand in the Kaseya attack? $70 million (p43)
+8. What was the Twitter handle in the author’s note? twitter.com/Mcnaughm1986 (p71)
+Numeric and comparison questions
+9. Which exchange hack was larger in USD, Coincheck (2018) or KuCoin (2020)? Coincheck, $534M vs ~$281M (p26)
+10. How many people and how much money were involved in the Pincoin/iFan scam? ~$660M from ~32,000 investors (p31)
+11. What return did PlexCoin promise, and what action did the SEC take? Over 1,300% in under a month; SEC halted the ICO and the founder was found guilty of fraud (p32)
+12. Compare the monthly returns promised by BitConnect and MMM Global. BitConnect up to 40%/month, MMM Global 100%/month (p36, p38)
+Multi-chunk / multi-hop
+13. Which exchange hacks involved Japan, and what regulatory consequence followed one of them? Mt. Gox (Japan-based) and Coincheck; Japanese regulators imposed stricter standards and mandatory audits after Coincheck (p25-26)
+14. BitConnect appears in Chapters 4 and 5. What loss figure and what mechanism does each give? Ch. 4: up to $1B lost, trading bot Ponzi. Ch. 5: up to 40%/month, lending scheme via BitConnect Coin, collapse after state cease-and-desist orders in early 2018 (p32, p36)
+15. Which scams are named in both the ICO chapter and the Ponzi chapter? BitConnect and OneCoin (p31-32, p36-37)
+16. Which crypto crimes does the book say rely on privacy coins like Monero and Zcash? Darknet markets, ransomware, money laundering, terrorism financing (p22, p39, p45, p51)
+17. What KYC/AML measures does the book propose across its chapters to counter crime? Exchange registration, KYC/AML, FATF travel rule, blockchain analytics, international cooperation (p47-48, p53-54)
+Conceptual / explanatory
+18. How does a crypto Ponzi scheme collapse? New investment slows and can’t cover payouts, often triggered by market shifts, regulation or investor wariness (p35)
+19. Why do ransomware attackers prefer cryptocurrency? Anonymity, cross-border ease, decentralization, irreversible fast payments, micropayments (p39-40)
+20. What is a mixing service and why is it used in laundering? Mixes tainted funds with others to obscure their source (p45)
+21. What is the FATF “travel rule”? Requires sharing information about senders and receivers of crypto transactions (p48)
+22. How did the Poly Network hacker behave afterward? Returned almost all of the $600M+, calling it a “security test” (p26)
+Country and regulation questions
+23. How does Japan regulate crypto according to the book? Recognized as legal property under the Payment Services Act, with exchange registration and AML/CFT standards (p57)
+24. Which regulator oversees crypto in Singapore, and which in Australia? MAS (Singapore), AUSTRAC (Australia) (p57-58)
+25. What is Russia’s stance? Taxable property, but prohibited as a means of payment (p58)
+Adversarial / edge cases
+26. Is the “Cryptocurrency XYZ” pump and dump a real case? No, the book labels it hypothetical, as with ‘AltExchange’ (p19-20)
+27. Unanswerable: What was Ross Ulbricht’s sentence? Not in the document; the system should say so rather than hallucinate (only the arrest is covered)
+28. Unanswerable: What does the book say about the FTX collapse? Not covered; the book has no FTX content
+29. Noise test: What are the Free eBooks bundles on page 2? This tests whether ad pages (p2, p72) get chunked and retrieved. Decide whether you want them filtered out. Expected if retained: 3 audiobook and 6 book collections, www.Free-eBooks.net
+30. Contradiction check: Does the book treat privacy coins as a security feature or a crime tool? Both. Ch. 10 lists them as a security/anonymity solution (p63), while Ch. 2, 6, 7 and 8 describe criminal misuse. A good answer surfaces both views.

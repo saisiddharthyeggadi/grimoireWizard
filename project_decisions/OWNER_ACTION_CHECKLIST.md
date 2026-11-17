@@ -10,26 +10,26 @@ file or in chat.
 - [x] **Frontend folders:** Keep Streamlit in `frontend/`; use sibling
   `frontend-angular/` for Angular.
 - [x] **Launch access (D20):** Open Google sign-up.
-- [x] **Reranking (R2):** Use a local cross-encoder. Candidate/keep counts are
-  still to be measured and documented.
+- [x] **Reranking (R2):** Use
+  `cross-encoder/ms-marco-MiniLM-L-6-v2`; retrieve 25 candidates and keep the
+  top 3.
 - [x] **Hosting:** Cloud Run for the backend and Firebase Hosting for Angular.
 - [x] **Streamlit with auth (D19):** Streamlit may be limited to local
   development/private pilots once auth is enabled.
 - [x] **Angular experience:** Owner is learning Angular for this project.
-- [x] **PDF limits:** Maximum 100 MB and 1,000 pages. Implementation remains
-  pending; current backend code still has a 50 MB upload cap and no page cap.
+- [x] **PDF limits:** Backend enforces a maximum 100 MB and 1,000 pages.
 - [x] **Gemini model (D4):** Confirmed as `gemini-4-hydrogen`.
 
 ## 2. Provide evaluation material (M3, first priority)
 
-- [ ] Identify the approved PDF filename(s) and provide page and passage
+- [X] Identify the approved PDF filename(s) and provide page and passage
   numbers for answerable evaluation examples. From those passages, create and
   review 15–20 questions with expected answers and source references; include
   questions whose answers are absent from the documents and mark them
   unanswerable.
-- [ ] Keep the PDFs available for later repeat runs. Evaluation results should
+- [X] Keep the PDFs available for later repeat runs. Evaluation results should
   be reproducible and reported without exposing private document contents.
-- [ ] Review the evaluation results and decide whether any retrieval or
+- [X] Review the evaluation results and decide whether any retrieval or
   generation change is worth its added latency. Results and configurations
   should be recorded in the root README.
 
@@ -58,7 +58,9 @@ After the Angular MVP exists:
 
 ## 5. Configure and verify authentication/isolation (M6)
 
-When auth is implemented:
+The auth code and SQL migration are prepared. Do not mark this section complete
+until the migration is applied to staging and the two-user isolation test has
+passed.
 
 - [ ] Enable Google as the Supabase Auth provider and configure the required
   OAuth consent screen and redirect URLs for each environment. Use only the

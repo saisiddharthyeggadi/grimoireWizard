@@ -17,15 +17,18 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and use Py
 uv sync --extra dev
 ```
 
-Run the SQL in [the migration](supabase/migrations/20261110000000_create_document_chunks.sql) in the Supabase SQL editor. It creates the 384-dimensional vector column, indexes, uniqueness constraint, and enables row-level security without adding public access policies.
+Run all SQL migrations in `supabase/migrations/` in order in the Supabase SQL editor. They create the vector, conversation, and document tables and a private `documents` Storage bucket. The new documents migration backfills metadata for already-indexed PDFs; their original files are not recoverable, so upload those PDFs again to enable previews. The auth migration adds per-user ownership, Auth profiles, Postgres RLS, and Storage policies. Existing rows remain ownerless and are intentionally not visible to signed-in users; upload those PDFs again after auth is enabled.
 
 Copy `.env.example` to `.env` in the `backend/` directory and set:
 
 ```dotenv
 SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your-public-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 GEMINI_API_KEY=your-gemini-api-key
 LLM_MODEL=gemini-4-hydrogen
+ENV=development
+AUTH_MODE=off
 ```
 
 The backend uses Gemini's OpenAI-compatible API endpoint and defaults to
@@ -33,7 +36,11 @@ The backend uses Gemini's OpenAI-compatible API endpoint and defaults to
 your API key. `GEMINI_API_KEY` is required; local and other LLM providers are
 not configured or supported.
 
-The service-role key bypasses row-level security: keep it private, and never put it in browser or mobile-client code.
+`SUPABASE_SERVICE_ROLE_KEY` bypasses row-level security and is used by the
+backend only for PDF ingestion. Keep it private and never put it in browser
+configuration. The public `SUPABASE_ANON_KEY` is used by the Angular client
+and by the backend to validate sessions and make user-scoped database
+requests.
 
 ## Ingest a PDF
 
@@ -49,7 +56,11 @@ uv run grimoire-ingest "/c/path/to/document.pdf" --similarity-threshold 0.45 --m
 
 `--overlap-words` repeats the end of one chunk at the start of the next. The repeated words count toward both `--max-words` and the embedding model's token limit; the default overlap is `0`, preserving non-overlapping chunks. The overlap must be smaller than the maximum chunk size.
 
-The document ID is deterministic for the PDF's exact bytes, so re-ingesting the same file upserts the same chunks. A changed PDF receives a new ID; the previous version remains in the table and can be removed by its `document_id` when desired. The embedding model may be downloaded the first time ingestion runs.
+The CLI is a local/admin ingestion tool: it derives a deterministic ID from the
+PDF bytes and leaves `user_id` unset. Such rows are intentionally invisible to
+authenticated users. The authenticated API derives the document ID from the
+user ID and PDF SHA-256, so identical PDFs belonging to different users do not
+collide. The embedding model may be downloaded the first time ingestion runs.
 
 ## Troubleshooting Supabase
 
@@ -77,10 +88,15 @@ can be ignored. Model and tokenizer downloads are expected on the first run.
 ## Conversation API
 
 The FastAPI application implements the conversation and PDF upload endpoints
-in `../project_decisions/backend_endpoints.md`. Apply both SQL migrations in
-`supabase/migrations/` to the same Supabase project used for ingestion. Start
-the API from this directory after setting `SUPABASE_URL`,
-`SUPABASE_SERVICE_ROLE_KEY`, and `GEMINI_API_KEY`:
+in `../project_decisions/backend_endpoints.md`. Apply all SQL migrations in
+`supabase/migrations/` to the same Supabase project used for ingestion. For
+local development, set `ENV=development` and `AUTH_MODE=off`. The API assigns
+the fixed local identity in `AUTH_DEV_USER_ID`; it refuses to start with auth
+disabled when `ENV=production`.
+
+For an authenticated deployment set `ENV=production`, `AUTH_MODE=on`,
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and
+`GEMINI_API_KEY`:
 
 ```bash
 uv sync --extra dev
@@ -92,9 +108,14 @@ OpenAPI schema. The backend connects only to Google's OpenAI-compatible Gemini
 endpoint; `LLM_MODEL` selects the Gemini model. Set `API_CORS_ORIGINS` to a
 comma-separated list when the frontend runs on a different origin.
 
-`POST /documents` accepts a PDF multipart upload (maximum 50 MB), runs the
-existing ingestion pipeline, and returns its deterministic `document_id`,
-filename, and chunk counts. `POST /conversations` accepts an optional `title`.
+`POST /documents` accepts a PDF multipart upload, stores it in the private
+Supabase Storage bucket under the signed-in user's ID, runs the existing ingestion pipeline, and returns its
+deterministic `document_id`, filename, and chunk counts. `GET /documents`
+returns the paginated document library, `GET /documents/{id}` returns document
+metadata and status, and `GET /documents/{id}/file` returns a five-minute
+signed URL for stored PDFs. Documents ingested before Storage was added remain
+listable, but need to be uploaded again for PDF previews. `POST /conversations`
+accepts an optional `title`.
 Attach an already-ingested document with
 `POST /conversations/{id}/documents` and a JSON `document_id`.
 `POST /conversations/{id}/messages` accepts `{ "content": "..." }` and streams
@@ -103,9 +124,18 @@ conversation and message tables persist chat history; retrieval is restricted
 to documents attached to that conversation and combines pgvector similarity
 with PostgreSQL full-text ranking.
 
-The API uses the Supabase service-role key exclusively on the server. This MVP
-does not implement user authentication or per-user conversation isolation;
-keep it on a trusted network until an authentication model is added.
+In `AUTH_MODE=on`, every request other than `GET /health` requires a Supabase
+access token in `Authorization: Bearer <access-token>`. The backend validates
+the token with Supabase Auth and uses that same token for user-scoped database
+and Storage operations so RLS applies. The service-role key is used only for
+the ingestion writes. The Angular app signs in with Google using the public
+Supabase URL and anon key in `src/environments/environment.ts` (local) and
+`environment.prod.ts` (production); never put the service-role key there.
+
+Before deploying, enable Google in Supabase Auth, configure the OAuth redirect
+URLs, and apply all migrations. In particular, the per-user RLS migration must
+be active before real documents are uploaded. An automated RLS check against
+the staging project is still required before launch.
 SSE errors use `document_not_ready`, `llm_unavailable`, `rate_limited`, or
 `internal_error` when a backend dependency fails.
 

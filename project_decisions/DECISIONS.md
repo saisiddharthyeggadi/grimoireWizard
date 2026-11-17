@@ -57,11 +57,10 @@ Two deployable parts:
 - Configurable chunking: similarity threshold, max chunk word count, overlap between adjacent chunks.
 
 ### Persistence **[IMPLEMENTED]**
-Tables: `document_chunks`, `conversations`, `conversation_documents`, `messages` (with citations). The backend uses the Supabase **service-role key**, server-side only.
-There is **no `documents` table** yet (document metadata lives on the chunks).
+Tables: `documents`, `document_chunks`, `conversations`, `conversation_documents`, `messages` (with citations). The backend uses the Supabase **service-role key**, server-side only. The documents table stores metadata and Storage paths; legacy indexed documents are backfilled without a stored PDF.
 
-### API **[IMPLEMENTED]** (8 endpoints)
-`GET /health`, `POST /documents` (upload and ingest), `POST /conversations`, `GET /conversations` (paginated), `GET /conversations/{id}`, `GET /conversations/{id}/messages`, `POST /conversations/{id}/documents` (attach), `POST /conversations/{id}/messages` (streams over SSE).
+### API **[IMPLEMENTED]** (11 endpoints)
+`GET /health`, `POST /documents` (upload, store, and ingest), `GET /documents`, `GET /documents/{id}`, `GET /documents/{id}/file`, `POST /conversations`, `GET /conversations` (paginated), `GET /conversations/{id}`, `GET /conversations/{id}/messages`, `POST /conversations/{id}/documents` (attach), and `POST /conversations/{id}/messages` (streams over SSE).
 
 SSE events: `status`, `token`, `citations`, `done`, `error`.
 
@@ -71,13 +70,13 @@ SSE events: `status`, `token`, `citations`, `done`, `error`.
 3. Search only the documents attached to the conversation, using vector similarity plus full-text ranking.
 4. Rerank and assemble context from the best chunks.
 5. Send excerpts plus the original question to **Gemini via the OpenAI-compatible endpoint**; stream the answer.
-6. Citations include document, page, and snippet.
+6. Citations include document, page, snippet, and a bounding-box field (currently empty until bbox extraction is implemented).
 
 ### Streamlit frontend **[IMPLEMENTED]**
 Backend URL entry, health check, create/list/reopen conversations, upload a PDF to start a conversation, attach previously indexed documents by UUID, chat, citations in a source expander.
 
 ### Not built yet
-Authentication and authorization, per-user isolation, production deployment config, monitoring/logging/alerting, hardened secret management, an evaluation harness, the Angular frontend, and the PDF side-panel viewer.
+Authentication and authorization, per-user isolation, production deployment config, monitoring/logging/alerting, hardened secret management, evaluation results, and citation bounding-box extraction/highlighting. The Angular MVP and PDF side-panel shell exist; Angular's performance gate has not been measured.
 
 ---
 
@@ -97,7 +96,7 @@ Authentication and authorization, per-user isolation, production deployment conf
 
 | ID | Decision | Status |
 |---|---|---|
-| D6 | Stack: Python backend, Supabase (Postgres + pgvector, plus Auth and Storage to come). | **[IMPLEMENTED]** (Auth and Storage **[PLANNED]**) |
+| D6 | Stack: Python backend, Supabase (Postgres + pgvector, Auth, and Storage). | **[IMPLEMENTED]** (Auth **[PLANNED]**) |
 | D7 | Backend framework is **FastAPI** with an OpenAPI spec. | **[IMPLEMENTED]** |
 | D8 | Answers stream over **SSE**. The Angular client reads it with `fetch` plus a stream reader (not `EventSource`, which cannot send an `Authorization` header or use POST). | **[IMPLEMENTED]** (server), **[RECOMMENDED]** (client approach) |
 | D9 | **Two frontends coexist.** Streamlit stays untouched as the fallback. Angular is built in a separate sibling folder. Both use the same backend API. | **[DECIDED]** |
@@ -109,14 +108,14 @@ Authentication and authorization, per-user isolation, production deployment conf
 | ID | Decision | Status |
 |---|---|---|
 | D12 | Sign-in is **Google**. | **[DECIDED]** |
-| D13 | Use **Supabase Auth** with the Google provider. The frontend gets a JWT and sends `Authorization: Bearer`. FastAPI verifies it on every request. | **[RECOMMENDED]** |
-| D14 | Roles: only `user` and `admin`, in a `profiles` table. | **[RECOMMENDED]** |
-| D15 | Per-user isolation uses **two layers**: `user_id` columns plus Postgres RLS on every table, and storage policies scoped by user path. | **[RECOMMENDED]** |
-| D16 | The backend queries Supabase **as the user** (their JWT) so RLS applies. Vector search is an RPC function that respects RLS. The service-role key is used only for background ingestion. | **[RECOMMENDED]** |
-| D17 | Document uniqueness is per user: unique on `(user_id, sha256)`, with the document ID derived from `user_id + sha256`. (Today the ID comes from the hash alone, which would collide across users and leak that another user has the same file.) Fix **before ingesting real data**. | **[RECOMMENDED]** |
+| D13 | Use **Supabase Auth** with the Google provider. The frontend gets a JWT and sends `Authorization: Bearer`. FastAPI verifies it on every request. | **[CODE IMPLEMENTED; PROVIDER SETUP PENDING]** |
+| D14 | Roles: only `user` and `admin`, in a `profiles` table. | **[MIGRATION WRITTEN; APPLICATION PENDING]** |
+| D15 | Per-user isolation uses **two layers**: `user_id` columns plus Postgres RLS on every table, and storage policies scoped by user path. | **[IMPLEMENTED IN MIGRATION; STAGING TEST PENDING]** |
+| D16 | The backend queries Supabase **as the user** (their JWT) so RLS applies. Vector search is an RPC function that respects RLS. The service-role key is used only for background ingestion. | **[IMPLEMENTED]** |
+| D17 | Document uniqueness is per user: unique on `(user_id, sha256)`, with the document ID derived from `user_id + sha256`. (Today the ID comes from the hash alone, which would collide across users and leak that another user has the same file.) Fix **before ingesting real data**. | **[IMPLEMENTED]** |
 | D18 | Google OAuth consent screen set to "In production" (basic scopes only: openid, email, profile). | **[RECOMMENDED]** |
 | D19 | **Streamlit under auth:** add an `AUTH_MODE=off\|on` flag to the backend. Streamlit works with auth off (local/private pilot). With auth on, Streamlit would need to send a token and is otherwise not supported. Production runs with auth on and serves Angular. | **[RECOMMENDED]** |
-| D20 | Launch invite-only (email allowlist) or open to any Google account. | **[OPEN]** |
+| D20 | Launch invite-only (email allowlist) or open to any Google account. | **Open Google sign-up** |
 
 ### 3.4 Retrieval and generation
 
@@ -153,14 +152,14 @@ Needed (**[RECOMMENDED]**): verify against the existing migrations in `backend/s
 | Table | Key columns |
 |---|---|
 | `profiles` (new) | `user_id` (FK to auth), `role` (`user` or `admin`) |
-| `documents` (new) | `id` (derived from `user_id + sha256`), `user_id`, `sha256`, `filename`, `storage_path`, `status` (`processing`, `ready`, `failed`), `error`, `page_count`, `created_at`. Unique `(user_id, sha256)` |
+| `documents` (implemented) | `id` (currently derived from the PDF hash), `sha256`, `filename`, `storage_path`, `status` (`processing`, `ready`, `failed`), `error`, `page_count`, `chunk_count`, `created_at`. Per-user IDs and uniqueness remain planned with auth. |
 | `document_chunks` (exists) | add `user_id`, `bboxes` (jsonb); confirm `page` and the full-text column are present |
 | `conversations` (exists) | add `user_id` |
 | `conversation_documents` (exists) | as is |
 | `messages` (exists) | confirm `status` (`streaming`, `complete`, `error`) so a dropped stream can be recovered |
 | `message_feedback` (optional) | `message_id`, `rating` |
 
-Storage: PDFs in a Supabase Storage bucket, path prefixed by `user_id`, with policies. The current backend does **not** store the original PDF, so storing it is required for the side-panel viewer.
+Storage: PDFs are stored in a private Supabase Storage bucket at `{document_id}/document.pdf`. User-scoped paths and policies remain planned with auth. PDFs ingested before Storage was introduced have no original file and must be uploaded again for the side-panel viewer.
 
 ---
 
@@ -173,9 +172,9 @@ Status column: ✅ implemented, ➕ needed for Angular (build next), ⏭ later.
 |---|---|---|
 | `GET /health` | Liveness. | ✅ |
 | `POST /documents` | Upload and ingest a PDF. | ✅ (background ingestion ⏭) |
-| `GET /documents/{id}` | Status (`processing`, `ready`, `failed`) and metadata. | ➕ |
-| `GET /documents` | The user's document library, for an attach picker (replaces typing UUIDs). | ➕ |
-| `GET /documents/{id}/file` | Short-lived signed URL for the PDF viewer. Requires PDF storage. | ➕ |
+| `GET /documents/{id}` | Status (`processing`, `ready`, `failed`) and metadata. | ✅ |
+| `GET /documents` | The document library, for an attach picker (replaces typing UUIDs). | ✅ |
+| `GET /documents/{id}/file` | Short-lived signed URL for the PDF viewer. Requires PDF storage. | ✅ |
 | `DELETE /documents/{id}` | Delete file and chunks. | ⏭ |
 | `GET /documents/{id}/events` | SSE ingestion progress (replaces polling). | ⏭ |
 | `POST /conversations` | Create (optional `document_ids`). | ✅ |
@@ -269,12 +268,12 @@ If the gate fails, fix the cause and re-measure. Do not remove or modify Streaml
 
 | ID | Change |
 |---|---|
-| B1 | **CORS** allowlist via an env var (for example `CORS_ORIGINS`). Streamlit calls the backend from its own server, so it never needed CORS; a browser-based Angular app does. |
-| B2 | `GET /documents/{id}` (status and metadata). |
-| B3 | `GET /documents` (library list). |
-| B4 | Store the original PDF in Supabase Storage on upload, and add `GET /documents/{id}/file` (signed URL). Documents ingested earlier have no stored file; re-upload them. |
+| B1 | **CORS** allowlist via `API_CORS_ORIGINS`. **[IMPLEMENTED]** |
+| B2 | `GET /documents/{id}` (status and metadata). **[IMPLEMENTED]** |
+| B3 | `GET /documents` (library list). **[IMPLEMENTED]** |
+| B4 | Store the original PDF in Supabase Storage on upload, and add `GET /documents/{id}/file` (signed URL). **[IMPLEMENTED]** Earlier indexed PDFs have no stored file; re-upload them. |
 | B5 | Capture `bboxes` per chunk at ingestion and include them in the `citations` payload. Re-ingest older documents. |
-| B6 | A `documents` table (section 4). |
+| B6 | A `documents` table (section 4). **[IMPLEMENTED]** |
 
 ---
 
@@ -353,22 +352,24 @@ Priority order: auth and isolation, then secrets and staging, then quotas and ra
 
 ---
 
-## 11. Open decisions (the owner must answer; agents must ask)
+## 11. Recorded owner decisions
 
-1. **Folder names:** confirm the actual Streamlit folder name, and approve `frontend-angular/` for the Angular app.
-2. **D20:** Invite-only or open sign-up at launch?
-3. **R2:** What reranker is in use today, and should production use a local cross-encoder or a hosted rerank API?
-4. **Hosting:** Where does the backend run (Cloud Run, Fly, Render, other), and where does the Angular static build go?
-5. **D19:** Is it acceptable for Streamlit to become a dev/private-pilot-only fallback once auth is on?
-6. **Angular:** Is the owner already comfortable with Angular, or learning it for this? (This changes the effort estimate for M5.)
-7. **Limits:** What are the max PDF size and page limits currently configured, and should they change for v1?
-8. **D4:** Confirm the exact Gemini model name used by the backend.
+- Keep Streamlit in `frontend/` and Angular in `frontend-angular/`.
+- Use Firebase Hosting, Cloud Run, and Supabase Auth with Google.
+- Launch with open Google sign-up; Streamlit is local/private-pilot only once auth is enabled.
+- Use `cross-encoder/ms-marco-MiniLM-L-6-v2`, retrieve 25 candidates, and keep the top 3.
+- Enforce a 100 MB PDF limit and a 1,000-page limit.
+- Use Gemini model `gemini-4-hydrogen`, Langfuse, and UptimeRobot.
+- The owner is learning Angular; retain the go/no-go gate before making it the default.
+
+Remaining account provisioning, secrets, OAuth setup, and staging/production
+verification are tracked in `OWNER_ACTION_CHECKLIST.md`.
 
 ---
 
 ## 12. Guidance for the owner: what to do next
 
-1. **Answer the open decisions in section 11.** Folder names and the reranker details are quick and unblock the rest.
+1. **Complete the owner actions in `OWNER_ACTION_CHECKLIST.md`.** Never put credentials in the repository or chat.
 2. **Run the evaluation first (M3).** You built hybrid search, reranking, and query rewrite; the eval is how you learn which ones earn their latency, and it is your best portfolio evidence.
 3. **Do the additive backend changes (M4)** before touching Angular, and add the Streamlit contract test in the same step so you can always revert safely.
 4. **Scaffold Angular in the sibling folder with performance budgets from day one.** Prototype the streaming message component and the PDF side panel first, and measure them against Streamlit before building the rest. These are the two places a slowdown would show up.

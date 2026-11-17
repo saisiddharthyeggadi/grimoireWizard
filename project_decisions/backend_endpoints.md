@@ -47,6 +47,7 @@ Error codes: document_not_ready, unsupported_pdf, llm_unavailable, rate_limited.
 MVP
 POST /documents	Upload a PDF. Dedupes by SHA-256, stores the file, returns the ID
 GET /documents/{id}	Status (poll for the MVP)
+GET /documents	List the document library
 GET /documents/{id}/file	Signed URL for the side-panel viewer
 
 POST /conversations	Create
@@ -61,9 +62,17 @@ GET /health	Liveness
 
 - `POST /conversations` accepts an optional JSON `title`; an empty body creates
   a conversation titled `New conversation`.
-- `POST /documents` accepts a PDF multipart upload (maximum 50 MB), processes
-  it with the existing ingestion pipeline, and returns its deterministic
-  document ID and ingestion counts.
+- `POST /documents` accepts a PDF multipart upload, stores it in the private
+  Supabase Storage bucket, processes it with the existing ingestion pipeline,
+  and returns its deterministic document ID and ingestion counts.
+- `GET /documents?limit=20&offset=0` returns `items`, `limit`, `offset`, and
+  `has_more`; each item includes its ID, filename, status, page/chunk counts,
+  and creation timestamp.
+- `GET /documents/{id}` returns the same metadata for one document, or 404
+  when it does not exist.
+- `GET /documents/{id}/file` returns `{ "url": "<signed-url>",
+  "expires_in": 300 }`. PDFs ingested before Storage was introduced have no
+  stored file and return 404 until uploaded again.
 - `GET /conversations?limit=20&offset=0` returns `items`, `limit`, `offset`,
   and `has_more`.
 - Conversation details include attached `documents` with `id`, `filename`,

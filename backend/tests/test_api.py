@@ -19,6 +19,8 @@ class FakeStore:
         self.messages = []
         self.attached = []
         self.search_limits = []
+        self.saved_documents = []
+        self.signed_url = "https://example.supabase.co/storage/signed.pdf"
 
     def create_conversation(self, title):
         return {"id": str(self.conversation_id), "title": title or "New conversation"}
@@ -40,6 +42,39 @@ class FakeStore:
         if document_id != self.document_id:
             return None
         return {"id": str(document_id), "filename": "guide.pdf", "status": "ready"}
+
+    def list_documents(self, limit, offset):
+        items = [self.get_document(self.document_id)][offset : offset + limit]
+        return {
+            "items": items,
+            "limit": limit,
+            "offset": offset,
+            "has_more": False,
+        }
+
+    def save_document(
+        self, document_id, filename, content, page_count, chunk_count, *, user_id
+    ):
+        self.saved_documents.append(
+            {
+                "id": document_id,
+                "filename": filename,
+                "content": content,
+                "pages": page_count,
+                "chunks": chunk_count,
+                "user_id": user_id,
+            }
+        )
+        return {
+            "id": document_id,
+            "filename": filename,
+            "status": "ready",
+        }
+
+    def get_document_file_url(self, document_id):
+        if document_id != self.document_id:
+            return None
+        return self.signed_url
 
     def attach_document(self, conversation_id, document_id):
         self.attached.append(self.get_document(document_id))
@@ -136,6 +171,45 @@ def test_health_and_conversation_creation():
     assert empty_response.json()["title"] == "New conversation"
 
 
+def test_auth_mode_requires_bearer_token_for_every_route_except_health(monkeypatch):
+    user_id = str(uuid4())
+    settings = Settings(
+        supabase_url="https://example.supabase.co",
+        supabase_service_role_key="server-secret-placeholder",
+        gemini_api_key="test-key",
+        llm_model="test-model",
+        supabase_anon_key="public-anon-placeholder",
+        auth_mode="on",
+    )
+    store = FakeStore()
+    observed = {}
+
+    def authenticate(_settings, token):
+        observed["token"] = token
+        return user_id, object()
+
+    monkeypatch.setattr("grimoire_api.main._authenticated_client", authenticate)
+    client = TestClient(create_app(store=store, settings=settings))
+
+    assert client.get("/health").status_code == 200
+    assert client.get("/documents").status_code == 401
+    assert client.get("/documents", headers={"Authorization": "Bearer user-token"}).status_code == 200
+    assert observed["token"] == "user-token"
+
+
+def test_production_refuses_auth_mode_off():
+    settings = Settings(
+        supabase_url=None,
+        supabase_service_role_key=None,
+        gemini_api_key=None,
+        llm_model="test-model",
+        environment="production",
+    )
+
+    with pytest.raises(RuntimeError, match="not permitted in production"):
+        create_app(settings=settings)
+
+
 def test_settings_load_gemini_key_and_default_model(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
     monkeypatch.setenv("LLM_API_URL", "http://localhost:1234/v1")
@@ -193,10 +267,11 @@ def test_gemini_client_ignores_local_llm_url(monkeypatch):
 def test_upload_pdf_ingests_and_returns_document_details(monkeypatch):
     observed = {}
 
-    def fake_ingest(pdf_path, client):
+    def fake_ingest(pdf_path, client, *, user_id):
         observed["filename"] = pdf_path.name
         observed["content"] = pdf_path.read_bytes()
         observed["client"] = client
+        observed["user_id"] = user_id
         return {
             "document_id": "doc-id",
             "pages": 2,
@@ -223,6 +298,53 @@ def test_upload_pdf_ingests_and_returns_document_details(monkeypatch):
     assert observed["filename"] == "guide.pdf"
     assert observed["content"] == b"%PDF-1.7 test content"
     assert observed["client"] is store.client
+    assert observed["user_id"] == "00000000-0000-4000-8000-000000000001"
+    assert store.saved_documents == [
+        {
+            "id": "doc-id",
+            "filename": "guide.pdf",
+            "content": b"%PDF-1.7 test content",
+            "pages": 2,
+            "chunks": 3,
+            "user_id": "00000000-0000-4000-8000-000000000001",
+        }
+    ]
+
+
+def test_document_list_and_status_endpoints():
+    store = FakeStore()
+    client = _client(store)
+
+    library = client.get("/documents?limit=10&offset=0")
+    details = client.get(f"/documents/{store.document_id}")
+    missing = client.get(f"/documents/{uuid4()}")
+
+    assert library.status_code == 200
+    assert library.json()["items"][0]["id"] == str(store.document_id)
+    assert library.json()["has_more"] is False
+    assert details.status_code == 200
+    assert details.json()["filename"] == "guide.pdf"
+    assert details.json()["status"] == "ready"
+    assert missing.status_code == 404
+
+
+def test_document_file_endpoint_returns_signed_url():
+    store = FakeStore()
+    response = _client(store).get(f"/documents/{store.document_id}/file")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "url": store.signed_url,
+        "expires_in": 300,
+    }
+
+
+def test_document_file_endpoint_reports_missing_legacy_pdf():
+    store = FakeStore()
+    store.signed_url = None
+    response = _client(store).get(f"/documents/{store.document_id}/file")
+
+    assert response.status_code == 404
 
 
 def test_upload_pdf_rejects_non_pdf_files():

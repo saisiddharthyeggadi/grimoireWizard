@@ -564,7 +564,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "rapidocr", specifier = ">=3.10.0" },
     { name = "sentence-transformers", specifier = ">=3.0" },
-    { name = "supabase", specifier = ">=2.0" },
+    { name = "supabase", specifier = ">=2.34.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 provides-extras = ["dev"]

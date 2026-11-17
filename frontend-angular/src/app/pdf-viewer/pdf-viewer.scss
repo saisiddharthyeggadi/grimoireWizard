@@ -1,0 +1,258 @@
+:host {
+  position: fixed;
+  z-index: 25;
+  inset: 0;
+}
+
+.pdf-scrim {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  background: #19201e50;
+  animation: fade-in 150ms ease-out;
+}
+
+.pdf-panel {
+  display: flex;
+  width: min(660px, 100%);
+  height: 100%;
+  flex-direction: column;
+  background: #f7f6f2;
+  box-shadow: -15px 0 55px #121b1726;
+  animation: slide-in 180ms ease-out;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slide-in {
+  from { transform: translateX(24px); }
+  to { transform: translateX(0); }
+}
+
+.pdf-header {
+  display: flex;
+  min-height: 4.65rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #e8e6e0;
+  background: #fffefa;
+  padding: 0.7rem 1rem;
+}
+
+.pdf-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.68rem;
+}
+
+.pdf-icon {
+  display: grid;
+  width: 2rem;
+  height: 2.3rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid #e9d8d1;
+  border-radius: 0.42rem;
+  background: #fcf3ef;
+  color: #a35b4a;
+  font-size: 0.52rem;
+  font-weight: 800;
+}
+
+.pdf-title strong,
+.pdf-title span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-title strong {
+  max-width: min(28rem, calc(100vw - 8rem));
+  color: #39423b;
+  font-size: 0.79rem;
+}
+
+.pdf-title span {
+  margin-top: 0.2rem;
+  color: #8c928b;
+  font-size: 0.66rem;
+}
+
+.close-button,
+.page-controls button {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid #e8e6df;
+  border-radius: 0.55rem;
+  background: #fffefa;
+  color: #626c64;
+  cursor: pointer;
+  font-size: 1.25rem;
+}
+
+.close-button:hover,
+.page-controls button:hover:not(:disabled) {
+  border-color: #bed0c5;
+  background: #f4f8f4;
+  color: #245c51;
+}
+
+.page-controls {
+  display: flex;
+  height: 3.2rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  border-bottom: 1px solid #e8e6e0;
+  color: #858b83;
+  font-size: 0.72rem;
+}
+
+.page-controls button {
+  width: 1.75rem;
+  height: 1.75rem;
+}
+
+.page-controls button:disabled {
+  color: #c2c4bd;
+  cursor: not-allowed;
+}
+
+.page-controls strong {
+  color: #455149;
+}
+
+.pdf-content {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  justify-content: center;
+  overflow: auto;
+  padding: 1.2rem;
+}
+
+.pdf-page-wrap {
+  width: 100%;
+  min-height: max-content;
+  text-align: center;
+}
+
+.pdf-page-wrap canvas {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid #e3e1da;
+  background: white;
+  box-shadow: 0 6px 22px #30352d12;
+}
+
+.pdf-loading {
+  position: absolute;
+  z-index: 1;
+  top: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  border: 1px solid #e8e6df;
+  border-radius: 99px;
+  background: #fffefa;
+  padding: 0.45rem 0.7rem;
+  color: #747d75;
+  font-size: 0.68rem;
+}
+
+.pdf-message {
+  max-width: 26rem;
+  margin: auto;
+  text-align: center;
+}
+
+.pdf-message-icon {
+  display: grid;
+  width: 2.6rem;
+  height: 2.6rem;
+  place-items: center;
+  margin: 0 auto 0.8rem;
+  border-radius: 50%;
+  background: #f5eee2;
+  color: #96723e;
+  font-size: 1.2rem;
+}
+
+.pdf-message strong {
+  color: #485148;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 1.05rem;
+  font-weight: 500;
+}
+
+.pdf-message p {
+  color: #81877f;
+  font-size: 0.74rem;
+  line-height: 1.65;
+}
+
+.pdf-footer {
+  flex: 0 0 auto;
+  border-top: 1px solid #e8e6e0;
+  background: #fffefa;
+  padding: 0.85rem 1rem 1rem;
+}
+
+.snippet-label {
+  color: #9a9c94;
+  font-size: 0.56rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.pdf-footer p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0.38rem 0 0.55rem;
+  color: #4f5951;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.highlight-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.36rem;
+  color: #999c94;
+  font-size: 0.63rem;
+}
+
+.highlight-note i {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 2px;
+  background: #d3a453;
+}
+
+.spinner {
+  width: 0.8rem;
+  height: 0.8rem;
+  border: 2px solid #dfe9e3;
+  border-top-color: #28695d;
+  border-radius: 50%;
+  animation: spin 750ms linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

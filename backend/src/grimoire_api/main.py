@@ -13,12 +13,15 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from openai import OpenAI, OpenAIError, RateLimitError
 from postgrest.exceptions import APIError
 from pydantic import BaseModel, Field
-from supabase import create_client
+from supabase import ClientOptions, create_client
+from supabase_auth.errors import AuthApiError, AuthInvalidJwtError, AuthRetryableError
+from storage3.exceptions import StorageException
 
 from grimoire_ingest.pipeline import ingest_pdf
 from grimoire_ingest.pipeline import MAX_PDF_UPLOAD_BYTES
@@ -29,7 +32,7 @@ from .reranker import (
     RERANKER_KEEP_COUNT,
     rerank_chunks,
 )
-from .store import SupabaseConversationStore
+from .store import SIGNED_URL_TTL_SECONDS, SupabaseConversationStore
 
 logger = logging.getLogger(__name__)
 EMBEDDING_DIMENSIONS = 384
@@ -56,21 +59,47 @@ def load_encoder() -> Any:
     return SentenceTransformer(EMBEDDING_MODEL)
 
 
-def _client_store(settings: Settings) -> SupabaseConversationStore:
+def _admin_client(settings: Settings) -> Any:
     settings.validate_supabase()
-    client = create_client(
+    return create_client(
         settings.supabase_url or "",
         settings.supabase_service_role_key or "",
     )
-    return SupabaseConversationStore(client)
+
+
+def _authenticated_client(settings: Settings, token: str) -> tuple[str, Any]:
+    settings.validate_auth()
+    client = create_client(
+        settings.supabase_url or "",
+        settings.supabase_anon_key or "",
+        ClientOptions(headers={"Authorization": f"Bearer {token}"}),
+    )
+    try:
+        user = client.auth.get_user(token).user
+    except (AuthApiError, AuthInvalidJwtError) as error:
+        raise HTTPException(
+            status_code=401, detail="Invalid or expired access token."
+        ) from error
+    except AuthRetryableError as error:
+        logger.exception("Supabase Auth could not validate the access token.")
+        raise HTTPException(
+            status_code=503, detail="Authentication service is unavailable."
+        ) from error
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired access token.")
+    return str(UUID(user.id)), client
 
 
 def _get_store(request: Request) -> SupabaseConversationStore:
     store = request.app.state.store
-    if store is None:
-        store = _client_store(request.app.state.settings)
-        request.app.state.store = store
-    return store
+    if store is not None:
+        return store
+    settings: Settings = request.app.state.settings
+    if settings.auth_mode == "on":
+        return SupabaseConversationStore(
+            request.state.supabase_client, request.state.user_id
+        )
+    return SupabaseConversationStore(_admin_client(settings), settings.auth_dev_user_id)
 
 
 def _get_encoder(request: Request) -> Any:
@@ -322,16 +351,50 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI(title="Grimoire Wizard API", version="0.1.0")
     app.state.settings = settings or Settings.from_environment()
+    app.state.settings.validate_production()
     app.state.store = store
     app.state.encoder = encoder
     app.state.llm_client = llm_client
     app.state.reranker = reranker
+    @app.middleware("http")
+    async def require_authentication(request: Request, call_next: Any) -> Any:
+        settings: Settings = request.app.state.settings
+        if request.method == "OPTIONS" or (
+            request.method == "GET" and request.url.path == "/health"
+        ):
+            return await call_next(request)
+        if settings.auth_mode == "off":
+            request.state.user_id = settings.auth_dev_user_id
+            return await call_next(request)
+
+        authorization = request.headers.get("Authorization", "")
+        scheme, separator, token = authorization.partition(" ")
+        if not separator or scheme.lower() != "bearer" or not token.strip():
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "A Bearer access token is required."},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        try:
+            user_id, client = await run_in_threadpool(
+                _authenticated_client, settings, token.strip()
+            )
+        except HTTPException as error:
+            return JSONResponse(
+                status_code=error.status_code,
+                content={"detail": error.detail},
+                headers=error.headers,
+            )
+        request.state.user_id = user_id
+        request.state.supabase_client = client
+        return await call_next(request)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(app.state.settings.cors_origins),
         allow_credentials=False,
         allow_methods=["GET", "POST"],
-        allow_headers=["Accept", "Content-Type"],
+        allow_headers=["Accept", "Authorization", "Content-Type"],
     )
 
     @app.get("/health")
@@ -362,8 +425,15 @@ def create_app(
             pdf_path = Path(directory) / filename
             with pdf_path.open("wb") as destination:
                 shutil.copyfileobj(file.file, destination)
+            store = _get_store(request)
+            user_id = request.state.user_id
+            ingestion_client = (
+                _admin_client(request.app.state.settings)
+                if request.app.state.settings.auth_mode == "on"
+                else store.client
+            )
             try:
-                result = ingest_pdf(pdf_path, _get_store(request).client)
+                result = ingest_pdf(pdf_path, ingestion_client, user_id=user_id)
             except APIError as error:
                 logger.exception("Supabase failed to store uploaded PDF chunks.")
                 raise HTTPException(
@@ -379,11 +449,63 @@ def create_app(
             finally:
                 file.file.close()
 
+            try:
+                document = store.save_document(
+                    str(result["document_id"]),
+                    filename,
+                    pdf_path.read_bytes(),
+                    int(result["pages"]),
+                    int(result["chunks"]),
+                    user_id=user_id,
+                )
+            except (APIError, StorageException) as error:
+                logger.exception("Supabase could not save the uploaded PDF.")
+                raise HTTPException(
+                    status_code=502,
+                    detail="Supabase could not save the uploaded PDF. Check the backend log.",
+                ) from error
+
         return {
             **result,
             "filename": filename,
-            "status": "ready",
+            "status": document["status"],
         }
+
+    @app.get("/documents")
+    def list_documents(
+        request: Request,
+        limit: int = Query(default=20, ge=1, le=100),
+        offset: int = Query(default=0, ge=0),
+    ) -> dict[str, Any]:
+        return _get_store(request).list_documents(limit, offset)
+
+    @app.get("/documents/{document_id}")
+    def get_document(document_id: UUID, request: Request) -> dict[str, Any]:
+        document = _get_store(request).get_document(document_id)
+        if document is None:
+            raise HTTPException(status_code=404, detail="Document not found.")
+        return document
+
+    @app.get("/documents/{document_id}/file")
+    def get_document_file(document_id: UUID, request: Request) -> dict[str, Any]:
+        store = _get_store(request)
+        document = store.get_document(document_id)
+        if document is None:
+            raise HTTPException(status_code=404, detail="Document not found.")
+        try:
+            signed_url = store.get_document_file_url(document_id)
+        except (APIError, StorageException) as error:
+            logger.exception("Supabase could not create a signed PDF URL.")
+            raise HTTPException(
+                status_code=502,
+                detail="Supabase could not create a signed PDF URL.",
+            ) from error
+        if signed_url is None:
+            raise HTTPException(
+                status_code=404,
+                detail="The original PDF is not stored for this document.",
+            )
+        return {"url": signed_url, "expires_in": SIGNED_URL_TTL_SECONDS}
 
     @app.post("/conversations", status_code=status.HTTP_201_CREATED)
     def create_conversation(

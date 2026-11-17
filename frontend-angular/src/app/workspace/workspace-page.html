@@ -1,0 +1,292 @@
+<div class="workspace-shell">
+  <aside class="sidebar" aria-label="Conversation navigation">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">g</div>
+      <div>
+        <div class="brand-name">Grimoire</div>
+        <div class="brand-caption">DOCUMENT STUDIO</div>
+      </div>
+      <button class="icon-button sidebar-settings" type="button" aria-label="API settings" (click)="openSettings()">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-1.7 2.94-.08-.02a1.7 1.7 0 0 0-1.72.28l-.07.05h-3.4l-.05-.08a1.7 1.7 0 0 0-1.44-.8 1.7 1.7 0 0 0-1.05.37l-.07.05-3.4-.92-.01-.08a1.7 1.7 0 0 0-.98-1.43l-.08-.04-.7-3.33.06-.06a1.7 1.7 0 0 0 .34-1.88l-.04-.08 1.7-2.94.08.02a1.7 1.7 0 0 0 1.72-.28l.07-.05h3.4l.05.08a1.7 1.7 0 0 0 1.44.8 1.7 1.7 0 0 0 1.05-.37l.07-.05 3.4.92.01.08a1.7 1.7 0 0 0 .98 1.43l.08.04.7 3.33z"></path></svg>
+      </button>
+    </div>
+
+    <button class="new-chat-button" type="button" (click)="createConversation()">
+      <span class="plus-icon" aria-hidden="true">+</span>
+      <span>New conversation</span>
+      <span class="shortcut">⌘ K</span>
+    </button>
+
+    <div class="sidebar-section-heading">
+      <span>YOUR LIBRARY</span>
+      <button class="small-icon-button" type="button" aria-label="Attach a document from your library" (click)="openDocumentPicker()">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"></path></svg>
+      </button>
+    </div>
+    <div class="conversation-list" aria-label="Recent conversations">
+      @if (loadingHistory()) {
+        <div class="sidebar-note">Loading conversations…</div>
+      } @else if (conversations().length === 0) {
+        <div class="sidebar-note">Your conversations will appear here.</div>
+      } @else {
+        @for (item of conversations(); track item.id) {
+          <button
+            class="conversation-link"
+            [class.active]="selectedId() === item.id"
+            type="button"
+            (click)="openConversation(item.id)"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5.5h12v8H9l-3.5 2v-2H4z"></path></svg>
+            <span>{{ item.title || 'New conversation' }}</span>
+          </button>
+        }
+        @if (historyHasMore()) {
+          <button class="load-more-link" type="button" [disabled]="loadingMoreHistory()" (click)="loadMoreConversations()">
+            {{ loadingMoreHistory() ? 'Loading…' : 'Load older conversations' }}
+          </button>
+        }
+      }
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="connection-row">
+        <span class="connection-dot" [class.online]="backendOnline() === true" [class.offline]="backendOnline() === false"></span>
+        <span>{{ backendOnline() === true ? 'Backend connected' : backendOnline() === false ? 'Backend offline' : 'Checking backend' }}</span>
+        <button class="small-icon-button" type="button" aria-label="Check backend connection" [disabled]="checkingBackend()" (click)="checkBackend()">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16 8a6 6 0 0 0-10-3L4 7m0-4v4h4m-4 5a6 6 0 0 0 10 3l2-2m0 4v-4h-4"></path></svg>
+        </button>
+      </div>
+      <div class="pilot-note">Private pilot · Documents stay on your backend</div>
+      <button class="settings-link" type="button" (click)="openSettings()">API connection</button>
+    </div>
+  </aside>
+
+  <main class="main-panel">
+    <header class="topbar">
+      <div class="crumbs">
+        <span>Workspace</span>
+        @if (currentConversation(); as current) {
+          <span class="crumb-separator">/</span>
+          <span class="current-crumb">{{ current.title || 'New conversation' }}</span>
+        }
+      </div>
+      <div class="topbar-actions">
+        <span class="model-badge"><span></span> Gemini · fixed model</span>
+        <button class="settings-link" type="button" (click)="signOut()">Sign out</button>
+      </div>
+    </header>
+
+    @if (pageError()) {
+      <div class="page-error" role="alert">
+        <span>{{ pageError() }}</span>
+        <button type="button" (click)="loadWorkspace()">Try again</button>
+      </div>
+    }
+
+    @if (!selectedId()) {
+      <section class="welcome">
+        <div class="welcome-kicker"><span class="sparkle">✳</span> YOUR PRIVATE READING ROOM</div>
+        <h1>Good questions<br /><em>begin with a source.</em></h1>
+        <p>Bring a PDF into the conversation. Ask what matters, and follow every answer back to the page it came from.</p>
+        <label class="welcome-upload" for="pdf-upload">
+          <span class="upload-mark" aria-hidden="true">↑</span>
+          <span>
+            <strong>{{ uploading() ? 'Adding your document…' : 'Start with a PDF' }}</strong>
+            <small>English PDFs · up to 100 MB and 1,000 pages</small>
+          </span>
+          <span class="upload-arrow">→</span>
+        </label>
+      </section>
+    } @else {
+      <section class="conversation-workspace" aria-label="Document conversation">
+        <div class="document-strip">
+          <div class="document-strip-copy">
+            <span class="strip-label">SOURCES IN THIS CONVERSATION</span>
+            <div class="attached-list">
+              @if (attachedDocuments().length === 0) {
+                <span class="empty-source">No documents attached yet</span>
+              } @else {
+                @for (document of attachedDocuments(); track document.id) {
+                  <span class="source-pill" [title]="document.filename || document.id">
+                    <svg viewBox="0 0 18 18" aria-hidden="true"><path d="M4 2.75h6l4 4v8.5H4zM10 2.75v4h4"></path></svg>
+                    <span>{{ document.filename || 'Untitled PDF' }}</span>
+                    @if (document.status === 'processing') { <i>Processing</i> }
+                  </span>
+                }
+              }
+            </div>
+          </div>
+          <div class="document-actions">
+            <label class="quiet-button" for="pdf-upload">
+              <span aria-hidden="true">↑</span> {{ uploading() ? 'Uploading…' : 'Add PDF' }}
+            </label>
+            <button class="quiet-button" type="button" (click)="openDocumentPicker()">Browse library</button>
+          </div>
+        </div>
+
+        <div #messageList class="message-list" aria-live="polite">
+          @if (loadingConversation()) {
+            <div class="loading-conversation"><span class="spinner"></span> Opening conversation…</div>
+          } @else if (messages().length === 0) {
+            <div class="empty-chat">
+              <div class="empty-chat-icon" aria-hidden="true">✳</div>
+              <h2>What would you like to understand?</h2>
+              <p>Ask a question about the attached documents. Answers are grounded in the text, with source pages to explore.</p>
+              @if (attachedDocuments().length === 0) {
+                <div class="processing-note">Attach a ready document to begin chatting.</div>
+              }
+            </div>
+          } @else {
+            @for (message of messages(); track message.id) {
+              <article class="message-row" [class.user-row]="message.role === 'user'" [class.assistant-row]="message.role === 'assistant'">
+                @if (message.role === 'assistant') {
+                  <div class="assistant-mark" aria-hidden="true">g</div>
+                }
+                <div class="message-content">
+                  @if (message.role === 'user') {
+                    <div class="user-bubble">{{ message.content }}</div>
+                  } @else {
+                    <app-message-body [content]="message.content" />
+                    @if (message.streaming && !message.content) {
+                      <div class="thinking-line"><span class="typing-dots"><i></i><i></i><i></i></span>{{ message.status || statusText() || 'Thinking' }}</div>
+                    }
+                    @if (message.streaming && message.content) {
+                      <div class="streaming-indicator"><span></span>{{ message.status || statusText() }}</div>
+                    }
+                    @if (message.error) {
+                      <div class="message-error" role="alert">
+                        <span>{{ message.error }}</span>
+                        @if (message.error !== 'Response stopped.') {
+                          <button type="button" (click)="retryMessage(message)">Retry</button>
+                        }
+                      </div>
+                    }
+                    @if (message.citations.length > 0) {
+                      <div class="citation-list" aria-label="Sources">
+                        @for (citation of message.citations; track citation.chunk_id) {
+                          <button
+                            class="citation-chip"
+                            type="button"
+                            [attr.aria-label]="'Open page ' + citation.page + ' in source PDF'"
+                            (click)="openCitation(citation)"
+                          >
+                            <span class="citation-page">p. {{ citation.page }}</span>
+                            <span>{{ documentNameFor(citation.document_id) || 'Source passage' }}</span>
+                            <span class="citation-arrow" aria-hidden="true">↗</span>
+                          </button>
+                        }
+                      </div>
+                    }
+                  }
+                </div>
+              </article>
+            }
+          }
+          <div class="message-end"></div>
+        </div>
+
+        <div class="composer-wrap">
+          @if (statusText() && sending()) {
+            <div class="composer-status"><span class="typing-dots"><i></i><i></i><i></i></span>{{ statusText() }}</div>
+          }
+          <form class="composer" (ngSubmit)="sendMessage()">
+            <textarea
+              aria-label="Ask about your documents"
+              [ngModel]="draft()"
+              (ngModelChange)="draft.set($event)"
+              name="question"
+              rows="1"
+              maxlength="20000"
+              placeholder="Ask anything about your documents…"
+              [disabled]="sending() || attachedDocuments().length === 0"
+              (keydown.enter)="onEnterKey($event)"
+            ></textarea>
+            <div class="composer-bottom">
+              <div class="composer-hint"><span class="lock-icon" aria-hidden="true">⌑</span> Answers are grounded in your sources</div>
+              @if (sending()) {
+                <button class="send-button stop-button" type="button" aria-label="Stop generating" (click)="cancelAnswer()">■</button>
+              } @else {
+                <button class="send-button" type="submit" aria-label="Send message" [disabled]="!canSend()">↑</button>
+              }
+            </div>
+          </form>
+          <p class="composer-disclaimer">AI can make mistakes. Check important details against the cited page.</p>
+        </div>
+      </section>
+    }
+    <input id="pdf-upload" class="visually-hidden" type="file" accept="application/pdf,.pdf" [disabled]="uploading()" (change)="onPdfSelected($event)" />
+  </main>
+</div>
+
+<ng-template #pdfPanelHost></ng-template>
+
+@if (showDocumentPicker()) {
+  <div class="modal-scrim" (click)="closeDocumentPicker()">
+    <section class="modal-card library-modal" role="dialog" aria-modal="true" aria-labelledby="library-title" (click)="$event.stopPropagation()">
+      <header class="modal-header">
+        <div>
+          <span class="modal-eyebrow">YOUR SOURCES</span>
+          <h2 id="library-title">Document library</h2>
+        </div>
+        <button class="icon-button" type="button" aria-label="Close document library" (click)="closeDocumentPicker()">×</button>
+      </header>
+      @if (documentLibraryLoading()) {
+        <div class="modal-state"><span class="spinner"></span> Loading documents…</div>
+      } @else if (documentLibraryError()) {
+        <div class="modal-error" role="alert">
+          <strong>The document library is unavailable.</strong>
+          <p>{{ documentLibraryError() }}</p>
+          <p>Check that the backend is running and that the configured API URL points to a deployment with <code>GET /documents</code> enabled. You can upload a PDF to this conversation instead.</p>
+          <button class="quiet-button" type="button" (click)="closeDocumentPicker()">Got it</button>
+        </div>
+      } @else if (documentLibrary().length === 0) {
+        <div class="modal-state">No indexed documents yet. Upload a PDF to get started.</div>
+      } @else {
+        <div class="library-list">
+          @for (document of documentLibrary(); track document.id) {
+            <div class="library-item">
+              <div class="library-file-icon" aria-hidden="true">PDF</div>
+              <div class="library-info">
+                <strong>{{ document.filename || 'Untitled PDF' }}</strong>
+                <span>{{ document.status }}@if (document.pages) { · {{ document.pages }} pages }</span>
+              </div>
+              <button
+                class="quiet-button"
+                type="button"
+                [disabled]="document.status !== 'ready' || attachingDocumentId() !== null"
+                (click)="attachFromLibrary(document)"
+              >
+                {{ attachingDocumentId() === document.id ? 'Attaching…' : 'Attach' }}
+              </button>
+            </div>
+          }
+        </div>
+      }
+    </section>
+  </div>
+}
+
+@if (showSettings()) {
+  <div class="modal-scrim" (click)="closeSettings()">
+    <section class="modal-card settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" (click)="$event.stopPropagation()">
+      <header class="modal-header">
+        <div>
+          <span class="modal-eyebrow">CONNECTION</span>
+          <h2 id="settings-title">Backend settings</h2>
+        </div>
+        <button class="icon-button" type="button" aria-label="Close settings" (click)="closeSettings()">×</button>
+      </header>
+      <label class="field-label" for="api-url">API base URL</label>
+      <input id="api-url" class="text-field" [value]="apiBaseDraft()" (input)="onApiBaseInput($event)" placeholder="http://127.0.0.1:8000" />
+      <p class="field-help">Saved in this browser only. The backend must allow this app's origin in its CORS settings.</p>
+      <div class="modal-actions">
+        <button class="quiet-button" type="button" (click)="closeSettings()">Cancel</button>
+        <button class="primary-button" type="button" (click)="saveApiBase()">Save connection</button>
+      </div>
+    </section>
+  </div>
+}
+
+@if (toast()) {
+  <div class="toast" role="status">{{ toast() }}</div>
+}

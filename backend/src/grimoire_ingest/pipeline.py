@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from .semantic import build_semantic_chunks, parse_markdown_pages
 
@@ -75,8 +76,13 @@ def build_chunk_records(
     similarity_threshold: float = 0.45,
     max_words: int = 300,
     overlap_words: int = 0,
+    user_id: str | None = None,
 ) -> tuple[str, list[dict[str, Any]], int]:
     document_id, checksum = _content_id(pdf_path)
+    if user_id is not None:
+        document_id = str(
+            uuid.uuid5(uuid.NAMESPACE_URL, f"user:{UUID(user_id)}:sha256:{checksum}")
+        )
     parsed_pages = parse_markdown_pages(pages)
     records: list[dict[str, Any]] = []
     tokenizer = getattr(encoder, "tokenizer", None)
@@ -106,6 +112,7 @@ def build_chunk_records(
             records.append(
                 {
                     "document_id": document_id,
+                    "user_id": user_id,
                     "chunk_index": chunk_index,
                     "content": chunk.text,
                     "embedding": _validate_embedding(chunk.embedding, chunk_index),
@@ -161,6 +168,7 @@ def ingest_pdf(
     similarity_threshold: float = 0.45,
     max_words: int = 300,
     overlap_words: int = 0,
+    user_id: str | None = None,
 ) -> dict[str, int | str]:
     if not pdf_path.is_file():
         raise FileNotFoundError(f"PDF file does not exist: {pdf_path}")
@@ -181,8 +189,24 @@ def ingest_pdf(
         similarity_threshold=similarity_threshold,
         max_words=max_words,
         overlap_words=overlap_words,
+        user_id=user_id,
     )
     upload_chunk_records(client, records)
+    client.table("documents").upsert(
+        {
+            "id": document_id,
+            "user_id": user_id,
+            "sha256": records[0]["metadata"]["sha256"],
+            "filename": pdf_path.name,
+            "storage_path": None,
+            "status": "ready",
+            "page_count": len(pages),
+            "chunk_count": len(records),
+            "error": None,
+        },
+        on_conflict="id",
+        ignore_duplicates=True,
+    ).execute()
     return {
         "document_id": document_id,
         "pages": len(pages),

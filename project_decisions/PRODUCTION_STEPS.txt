@@ -1,0 +1,248 @@
+GRIMOIRE WIZARD: PRODUCTION STEPS
+=================================
+Last updated: 2026-11-17
+Goal: take the working MVP (FastAPI backend + Streamlit/Angular frontend,
+Supabase, Gemini) to a product that is safe to run for real users.
+
+Notes
+- Vendors below are the ones you approved. I have NOT verified current
+  pricing, plan limits, or features. Check them before you commit.
+- Three items still need one pick from you (marked "PICK ONE").
+- Work top to bottom. Each phase lists steps and a "Done when" test.
+- Mark each step [x] when finished.
+
+
+APPROVED VENDOR STACK
+---------------------
+Auth ............................ Supabase Auth (Google provider)
+Data isolation .................. Supabase Postgres RLS
+Database + vectors .............. Supabase Postgres + pgvector
+File storage .................... Supabase Storage
+Backend hosting ................. Google Cloud Run
+Frontend hosting ................ Firebase Hosting
+Background ingestion ............ Cloud Run Jobs or a small queue
+LLM ............................. Gemini API (retries + budget alert)
+Secrets ......................... Google Secret Manager
+Rate limiting / abuse ........... slowapi (+ Cloudflare if public)
+Logs + errors ................... Cloud Logging + Sentry
+LLM observability ............... Langfuse
+Uptime + alerting ............... UptimeRobot + Sentry + budget alerts
+CI/CD ........................... GitHub Actions
+Testing ......................... own eval set + Playwright
+Security hygiene ................ Dependabot + gitleaks
+
+
+PHASE 0: FINALIZE OPEN DECISIONS
+--------------------------------
+[x] Pick the static host: Firebase Hosting.
+    (Firebase can rewrite /api/* to Cloud Run so the browser sees one
+    origin and CORS is simpler.)
+[x] Pick LLM observability: Langfuse.
+[x] Pick the uptime tool: UptimeRobot.
+[x] D19: Streamlit once auth is on. Option 1 (dev/private-pilot only),
+    option 2 (keep supported with auth), or not yet.
+[x] D20: launch invite-only (email allowlist) or open to any Google
+    account.
+[x] Confirm the reranker in use today, and the candidates/keep counts
+    (about 20 scored, 3-5 kept).
+[x] Confirm the exact Gemini model name and max PDF size/page limits.
+Done when: every item is answered and recorded in DECISIONS.md.
+
+
+PHASE 1: AUTH AND PER-USER ISOLATION   (highest priority)
+---------------------------------------------------------
+Code implementation is prepared: Angular Google sign-in, Bearer-token
+validation, AUTH_MODE enforcement, per-user document IDs, and the RLS/storage
+migration. These checklist items remain open until the migration is applied
+and verified in staging; do not ingest real data before that verification.
+[ ] Enable the Google provider in Supabase Auth.
+[ ] Set the Google OAuth consent screen to "In production"
+    (basic scopes only: openid, email, profile).
+[ ] Frontend signs in with Google and sends the JWT as
+    "Authorization: Bearer".
+[ ] FastAPI verifies the JWT on every request except GET /health.
+[ ] Add a profiles table with role: user or admin. No other roles.
+[ ] Add AUTH_MODE=off|on. With off, treat every request as one fixed
+    dev user. The backend must refuse to start with AUTH_MODE=off when
+    ENV=production.
+[ ] Add a documents table (id, user_id, sha256, filename, storage_path,
+    status, error, page_count, created_at).
+[ ] FIX BEFORE INGESTING REAL DATA: derive the document ID from
+    user_id + sha256, with a unique constraint on (user_id, sha256).
+    Today the ID comes from the hash alone, so two users uploading the
+    same PDF would collide and one could learn the other has that file.
+[ ] Add user_id to conversations and document_chunks.
+[ ] Enable RLS on every table, with policies tied to user_id.
+[ ] Backend queries Supabase as the user (their JWT) so RLS applies.
+    Vector search becomes an RPC function that respects RLS. The
+    service-role key is used only for background ingestion.
+[ ] Store PDFs in Supabase Storage under a user_id path prefix, with
+    storage policies.
+Done when: an automated test proves user A cannot read user B's
+documents, chunks, conversations, messages, or PDF files.
+
+
+PHASE 2: ENVIRONMENTS, SECRETS, CI/CD
+-------------------------------------
+[ ] Create two Supabase projects: staging and production.
+[ ] Create two Cloud Run services: staging and production, running the
+    same Docker image (promote the image, do not rebuild).
+[ ] Set Cloud Run minimum instances to 1, so the embedding model (and
+    reranker, if local) is already loaded. Scale-to-zero cold starts
+    would slow the first question.
+[ ] Check the Cloud Run CPU setting for background work after a
+    response ends (see current Cloud Run docs), or move ingestion to a
+    Cloud Run Job.
+[ ] Put the service-role key and the Gemini key in Google Secret
+    Manager. Separate keys per environment. Plan for rotation.
+[ ] Keep .env gitignored. The browser app only ever gets the public
+    Supabase URL and anon key.
+[ ] GitHub Actions pipeline: lint -> tests -> build image -> deploy to
+    staging -> manual approval -> promote to production.
+[ ] Apply migrations with the Supabase CLI in CI, staging first.
+[ ] Deploy the Angular build to the static host, with per-environment
+    config (API URL, Supabase URL, anon key).
+[ ] Register separate Google OAuth redirect URIs per environment.
+[ ] CORS: allow only the known frontend origins (env var such as
+    CORS_ORIGINS). Never "*" in production.
+[ ] Write down the rollback step: redeploy the previous image and the
+    previous Angular build.
+Done when: a merge to main reaches staging automatically, and a manual
+approval promotes the same image to production.
+
+
+PHASE 3: ABUSE AND COST PROTECTION
+----------------------------------
+[ ] Per-user rate limits in the API (slowapi, with a shared store if
+    you run more than one instance).
+[ ] Quotas: max PDF size, max pages, documents per user, messages per
+    day, concurrent ingestions, request timeouts.
+[ ] Validate uploads: file type, size, and that the file really is a
+    PDF. Reject scanned/image-only PDFs with an unsupported_pdf error.
+[ ] Gemini calls: timeouts, retries with backoff, and a clear
+    llm_unavailable error when it is down.
+[ ] Set a hard spend cap or budget alert at the LLM provider.
+[ ] Put Cloudflare (WAF, rate limits) in front if the app is public.
+[ ] If you launch invite-only, enforce the email allowlist.
+Done when: a script that spams uploads or questions is throttled, and a
+budget alert fires in a test.
+
+
+PHASE 4: OBSERVABILITY AND ALERTING
+-----------------------------------
+[ ] Structured JSON logs with a request ID on every line, shipped to
+    Cloud Logging. Do not log PDF contents or full prompts.
+[ ] Sentry on the backend (and the Angular app) for errors.
+[ ] Record per-stage latency: rewrite, retrieval, rerank,
+    time-to-first-token, total.
+[ ] Record token usage and cost per request.
+[ ] LLM tracing with Langfuse or Pydantic Logfire (your pick).
+[ ] Uptime check on GET /health.
+[ ] Alerts on: error rate, p95 latency, daily LLM spend, ingestion
+    failures.
+Done when: you can take one slow request ID and see which stage was
+slow, and a forced error produces an alert.
+
+
+PHASE 5: INGESTION ROBUSTNESS
+-----------------------------
+[ ] POST /documents returns immediately; ingestion runs in the
+    background (Cloud Run Job or a small queue).
+[ ] Document status: processing, ready, failed (with an error message).
+[ ] Retries for failed ingestion, and cleanup of partial results.
+[ ] Keep stale-trailing-chunk cleanup on re-ingest.
+[ ] Store the original PDF and expose a signed URL
+    (GET /documents/{id}/file) for the viewer.
+[ ] Capture bounding boxes per chunk (bboxes) for citation highlights.
+[ ] Check chunk size against the embedding model's input limit (about
+    256 word pieces for all-MiniLM-L6-v2) so text is not silently cut.
+Done when: a large PDF uploads without blocking, shows progress, and a
+deliberately corrupted PDF fails cleanly with a clear message.
+
+
+PHASE 6: TESTING
+----------------
+[ ] Unit tests for chunking, parsing, and request validation.
+[ ] Integration tests against real Postgres + pgvector (local Supabase
+    or the staging project).
+[ ] Auth in tests: create test users with the Supabase admin API and
+    mint their sessions. Do not automate the Google login screen.
+[ ] Mock the LLM in most tests; keep a few real-call smoke tests.
+[ ] Playwright end-to-end test of the Angular flow: sign in, upload,
+    attach, ask, see streamed answer, open a citation.
+[ ] Mandatory isolation test (see Phase 1).
+[ ] Contract test for the endpoints Streamlit uses, so backend changes
+    cannot break it silently.
+[ ] Test that streaming works through your host and any CDN/WAF
+    (no buffering, no early timeouts).
+[ ] Simple load test: several users asking questions at once, watch
+    latency and memory.
+[ ] RAG evaluation set (15-20 Q/A, including questions NOT answered in
+    the documents). Re-run before every release.
+Done when: CI runs all of the above (except the real-call smoke tests,
+which can run nightly) and blocks a release on failure.
+
+
+PHASE 7: SECURITY HYGIENE
+-------------------------
+[ ] Dependabot for dependency updates.
+[ ] gitleaks (pre-commit and CI) to catch committed secrets.
+[ ] Sanitize all model output before rendering it in the browser.
+[ ] Prompt-injection tests: upload PDFs that contain instructions aimed
+    at the model, and confirm the app treats document text as data.
+[ ] Pin dependency versions and rebuild images regularly.
+[ ] Backups: confirm your Supabase plan includes backups, then
+    actually perform a test restore.
+Done when: a restore test succeeds and a hostile test PDF does not
+change the app's behavior.
+
+
+PHASE 8: PRIVACY AND LEGAL
+--------------------------
+[ ] Privacy policy and terms of service.
+[ ] Let users delete a document and their account, including chunks,
+    messages, and stored PDFs.
+[ ] Define a retention policy.
+[ ] Check your Gemini agreement/settings for how user data is used.
+[ ] Get legal review before real users upload real documents.
+Done when: a deletion request removes all of a user's data and you can
+show it.
+
+
+PHASE 9: LAUNCH READINESS
+-------------------------
+[ ] One-page runbooks: LLM is down, ingestion is stuck, quota hit,
+    database is slow.
+[ ] Graceful degradation: what the user sees when the LLM, reranker, or
+    database is slow or down.
+[ ] Go/no-go gate: Angular must match or beat Streamlit rendering
+    (see DECISIONS.md section 6.3) before it becomes the default.
+[ ] README status line stays honest: say what is and is not
+    production-hardened.
+[ ] Final launch decision (D20: invite-only vs open sign-up).
+Done when: you can answer "what happens if X fails?" for each
+dependency, and a rollback has been rehearsed once.
+
+
+LATER (WHEN YOU NEED THEM)
+--------------------------
+- Hosted reranker (Cohere, Voyage, Jina, Vertex AI ranking), if your
+  evaluation shows a clear quality gain.
+- Payments (Stripe, Paddle, Lemon Squeezy) if you charge.
+- Transactional email (Resend, Postmark, SendGrid, AWS SES).
+- Product analytics (PostHog, Plausible).
+- Status page (Better Stack, Instatus).
+- Compliance tooling (Vanta, Drata) for enterprise customers.
+
+
+SUGGESTED ORDER (SUMMARY)
+-------------------------
+1. Phase 0   Finalize open decisions
+2. Phase 1   Auth and isolation, with the isolation test
+3. Phase 2   Environments, secrets, CI/CD
+4. Phase 3   Quotas, rate limits, spend caps
+5. Phase 4   Logging, error tracking, uptime, alerts
+6. Phase 5   Ingestion robustness
+7. Phase 6   Full testing (E2E, load, eval)
+8. Phase 7-8 Security hygiene, privacy and legal
+9. Phase 9   Launch readiness

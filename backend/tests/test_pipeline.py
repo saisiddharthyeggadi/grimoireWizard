@@ -33,11 +33,19 @@ class Query:
 
 
 class Table:
-    def __init__(self, client):
+    def __init__(self, client, table_name):
         self.client = client
+        self.table_name = table_name
 
-    def upsert(self, records, on_conflict):
-        assert on_conflict == "document_id,chunk_index"
+    def upsert(self, records, on_conflict, **options):
+        expected_conflict = (
+            "document_id,chunk_index"
+            if self.table_name == "document_chunks"
+            else "id"
+        )
+        assert on_conflict == expected_conflict
+        if self.table_name == "documents":
+            assert options == {"ignore_duplicates": True}
         return Query(self.client, "upsert", records)
 
     def delete(self):
@@ -48,8 +56,8 @@ class FakeClient:
     def __init__(self):
         self.calls = []
 
-    def table(self, _table_name):
-        return Table(self)
+    def table(self, table_name):
+        return Table(self, table_name)
 
 
 def test_chunk_records_include_required_metadata_and_384d_vectors(tmp_path):
@@ -71,6 +79,29 @@ def test_chunk_records_include_required_metadata_and_384d_vectors(tmp_path):
     assert records[0]["metadata"]["source_file"] == "guide.pdf"
     assert records[0]["metadata"]["paragraph_end"] == 2
     assert len(records[0]["embedding"]) == EMBEDDING_DIMENSIONS
+    assert records[0]["user_id"] is None
+
+
+def test_document_ids_are_scoped_to_user_for_identical_pdf_bytes(tmp_path):
+    pdf_path = tmp_path / "guide.pdf"
+    pdf_path.write_bytes(b"same pdf bytes")
+
+    first_id, first_records, _ = build_chunk_records(
+        pdf_path,
+        ["A useful paragraph."],
+        FixedEncoder(),
+        user_id="00000000-0000-4000-8000-000000000001",
+    )
+    second_id, second_records, _ = build_chunk_records(
+        pdf_path,
+        ["A useful paragraph."],
+        FixedEncoder(),
+        user_id="00000000-0000-4000-8000-000000000002",
+    )
+
+    assert first_id != second_id
+    assert first_records[0]["user_id"] == "00000000-0000-4000-8000-000000000001"
+    assert second_records[0]["user_id"] == "00000000-0000-4000-8000-000000000002"
 
 
 def test_build_chunk_records_passes_overlap_words_to_chunker(tmp_path):
@@ -130,6 +161,29 @@ def test_upload_batches_records_and_removes_stale_trailing_chunks():
     assert [call[0] for call in client.calls] == ["upsert", "upsert", "delete"]
     assert len(client.calls[0][1]) == 2
     assert len(client.calls[1][1]) == 1
+
+
+def test_ingestion_records_document_metadata(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "guide.pdf"
+    pdf_path.write_bytes(b"pdf bytes")
+    client = FakeClient()
+    monkeypatch.setattr("grimoire_ingest.pipeline._pdf_page_count", lambda _path: 1)
+
+    result = ingest_pdf(
+        pdf_path,
+        client,
+        parser=lambda _path: ["A useful paragraph."],
+        encoder=FixedEncoder(),
+    )
+
+    assert result["pages"] == 1
+    metadata = client.calls[-1][1]
+    assert metadata["id"] == result["document_id"]
+    assert metadata["filename"] == "guide.pdf"
+    assert metadata["status"] == "ready"
+    assert metadata["page_count"] == 1
+    assert metadata["chunk_count"] == result["chunks"]
+    assert metadata["storage_path"] is None
 
 
 def test_rejects_vectors_with_wrong_dimension(tmp_path):
