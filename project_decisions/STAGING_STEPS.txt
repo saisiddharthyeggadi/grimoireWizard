@@ -1,0 +1,362 @@
+GRIMOIRE WIZARD: STAGING STEPS
+==============================
+Goal: run the app fully in the cloud, with every laptop switched off.
+Staging must be the same infrastructure shape as production, so going to
+production means changing connections (URLs, keys, env vars) and nothing
+else. No code logic changes.
+
+Notes
+- Vendor behavior, free-tier limits and prices are NOT fully verified.
+  Cloud Run free-tier numbers below were read from the Google pricing page
+  on 2026-11-19; re-check before you commit.
+- Derived from the repo as it is today (config.py, main.py, firebase.json,
+  environment.prod.ts, Supabase migrations) and PRODUCTION_STEPS.txt.
+- Work A -> B -> C -> D -> E. Mark each step [x] when done.
+
+
+CLOUD CHOICE: GOOGLE CLOUD (NOT AWS)
+------------------------------------
+Decision: Google Cloud. Reasons:
+- Free tier that stays free. Cloud Run has a monthly free allowance that
+  resets every month with no end date (request-based billing: 180,000
+  vCPU-seconds, 360,000 GiB-seconds, 2 million requests per month).
+  AWS's new-account Free plan is $200 of credits for 6 months, and the
+  account closes on its own after 6 months or when credits run out unless
+  you upgrade. That is a trial, not a free tier.
+- Upgrade path with no rework. Free -> paid is the same Cloud Run
+  service with different limits. Nothing is re-platformed.
+- Already your approved stack: Cloud Run, Firebase Hosting, Secret
+  Manager, Gemini (PRODUCTION_STEPS.txt). Staging = production shape.
+- Fewer accounts: backend, frontend host and LLM key sit in one Google
+  account and one billing account.
+- AWS would need a different shape for this backend. EC2 free-tier
+  instances are small for two in-process ML models, and the easy
+  container service (App Runner) has no free allowance as far as I know.
+  Check AWS yourself if you want to compare.
+
+Honest limits of the free tier (plan for these)
+- Cloud Run still needs a billing account (card) to be enabled. Set a
+  budget alert first. New-customer credits may exist; check.
+- Minimum instances = 0 in staging. Free allowance is about 25 hours of
+  one 4 GiB instance per month (360,000 / 4 GiB / 3600), so it cannot
+  keep an instance warm. Result: the first request after idle is a COLD
+  START while the two models load (expect tens of seconds; not measured).
+  Production sets min instances = 1, which costs money. That is the
+  upgrade.
+- Image storage: the image with baked models is probably 2-3 GB. Artifact
+  Registry's free storage is small (verify), so expect cents per month.
+- Ingestion currently runs inside the upload request (there is no
+  background task in main.py). With request-based billing the CPU is
+  only guaranteed while the request is open, so keep the request open and
+  set a long request timeout. Moving ingestion to a Cloud Run Job is
+  Phase 5 of PRODUCTION_STEPS.txt.
+- Supabase and Firebase free plans have their own limits (for example
+  Supabase can pause an idle free project). Check both before relying
+  on them.
+
+
+THE RULE: ONE IMAGE, ONE BUILD, DIFFERENT CONNECTIONS
+-----------------------------------------------------
+Staging and production run the same artifacts. Only these change:
+  - backend env vars (SUPABASE_*, GEMINI_API_KEY, API_CORS_ORIGINS)
+  - Angular per-environment config (apiBaseUrl, supabaseUrl, anon key)
+  - Cloud Run settings (min instances, memory, CPU), not code
+Staging runs with ENV=production and AUTH_MODE=on. config.py already
+refuses AUTH_MODE=off, "*" CORS and localhost CORS origins in production,
+so staging proves the production settings really start.
+
+
+THE INFRA (WHAT RUNS WHERE)
+---------------------------
+Part   Role                   Staging (now)                Production (later)
+----   --------------------   --------------------------   -------------------------
+A      Database, auth, files  Supabase project "staging"   Supabase project "prod"
+B      Backend API + models   Cloud Run service            Cloud Run service
+                              "grimoire-api-staging",      "grimoire-api-prod", same
+                              min instances 0              image, min instances 1
+C      Frontend (Angular)     Firebase Hosting staging     Firebase Hosting prod
+                              site                         site
+D      LLM                    Gemini API, staging key      Gemini API, prod key
+E      Login                  Google OAuth via Supabase    Same, prod redirect URIs
+
+Everything is a managed cloud service. Nothing depends on any laptop.
+
+Run:
+  A  Supabase runs Postgres + pgvector, Auth (Google), Storage bucket
+     "documents". You run migrations against it.
+  B  We run the backend Docker image on Cloud Run (FastAPI via uvicorn,
+     loads all-MiniLM-L6-v2 and the ms-marco-MiniLM-L-6-v2 reranker).
+     Cloud Run gives it a public HTTPS URL.
+  C  We run "ng build" once and deploy the output to Firebase Hosting.
+  D  We run nothing. We only create a key.
+  E  We run nothing. We configure Google Cloud OAuth and Supabase Auth.
+
+
+WHAT EACH PART NEEDS, AND WHERE IT IS STORED
+--------------------------------------------
+Rule: secrets never go in git, never in the Angular app. Only the
+Supabase URL and anon key are public and may go in the Angular config.
+
+A. SUPABASE (staging project)
+  Needs                        Stored in
+  ---------------------------  ------------------------------------------
+  Project URL                  backend env SUPABASE_URL
+                               Angular staging config (public)
+  anon (publishable) key       backend env SUPABASE_ANON_KEY
+                               Angular staging config (public)
+  service-role (secret) key    Google Secret Manager, mounted into
+                               Cloud Run as SUPABASE_SERVICE_ROLE_KEY
+  DB password / access token   your password manager (for Supabase CLI)
+  Migrations (4 files)         git: backend/supabase/migrations/
+  "documents" bucket           created by the migration, not by hand
+
+B. BACKEND ON CLOUD RUN
+  Needs                        Stored in
+  ---------------------------  ------------------------------------------
+  Dockerfile                   git: backend/Dockerfile
+  Docker image                 Google Artifact Registry (same image tag
+                               is deployed to staging, then production)
+  Secret env vars              Google Secret Manager:
+                               SUPABASE_SERVICE_ROLE_KEY, GEMINI_API_KEY
+                               (separate secrets per environment)
+  Plain env vars               Cloud Run service config (not secret):
+                               ENV=production, AUTH_MODE=on,
+                               SUPABASE_URL, SUPABASE_ANON_KEY,
+                               LLM_MODEL, API_CORS_ORIGINS=<Firebase
+                               staging URL>
+                               (also keep a copy in a deploy script or
+                               GitHub Actions variables, no secrets)
+  Model files (HF models)      baked into the image at build time, so the
+                               container does not download on each start
+  Public API URL               Cloud Run service URL (https://...run.app)
+                               -> Angular staging config (apiBaseUrl)
+
+C. FRONTEND (Angular on Firebase Hosting)
+  Needs                        Stored in
+  ---------------------------  ------------------------------------------
+  Firebase project + site      Firebase console; id in .firebaserc (git)
+  firebase.json                git: frontend-angular/firebase.json (exists)
+  Staging config               src/environments/environment.staging.ts
+                               (git, public values only: apiBaseUrl,
+                               supabaseUrl, supabaseAnonKey)
+  Firebase CLI login / token   your laptop login (later a GitHub Actions
+                               secret)
+  Build output                 dist/frontend-angular/browser (not in git)
+
+D. GEMINI
+  Needs                        Stored in
+  ---------------------------  ------------------------------------------
+  Separate STAGING API key     Google Secret Manager (GEMINI_API_KEY),
+                               mounted into the Cloud Run service
+  Model name                   LLM_MODEL in the Cloud Run env vars
+                               (gemini-4-hydrogen, same as prod)
+  Budget alert / spend cap     Google Cloud billing console
+
+E. GOOGLE LOGIN
+  Needs                        Stored in
+  ---------------------------  ------------------------------------------
+  Google OAuth client ID +     Supabase dashboard > Auth > Google
+  secret (staging)             provider (NOT in the repo, NOT in the app)
+  Supabase callback URL        Google Cloud console > Authorized
+  (https://<ref>.supabase.     redirect URIs
+  co/auth/v1/callback)
+  Firebase staging URL         Supabase > Auth > URL configuration
+                               (Site URL + Redirect URLs). The app sends
+                               window.location.origin as redirectTo.
+
+
+TODO A: SUPABASE (database, auth, storage)
+------------------------------------------
+[x] Create a NEW Supabase project named "grimoire-staging". Never reuse
+    the dev project.
+[x] Save the project URL, anon key and service-role key in the password
+    manager.
+[x] Install the Supabase CLI. Run "supabase login" and
+    "supabase link --project-ref <staging-ref>" from backend/.
+[ ] Run "supabase db push" to apply all 4 migrations in order:
+      20261110000000_create_document_chunks
+      20261112000000_create_conversations
+      20261117000000_create_documents_and_storage
+      20261117010000_add_auth_and_user_isolation
+[x] Verify in the dashboard: pgvector extension on, tables profiles /
+    documents / document_chunks / conversations / messages exist, RLS is
+    ON for every table, bucket "documents" exists and is private.
+[x] Verify the search_document_chunks function exists.
+[x] Auth > Providers: enable Google (credentials come from step E).
+[x] Auth > URL configuration: set Site URL and Redirect URLs to the
+    Firebase staging URL (after step C gives it to you).
+[ ] Run the two-user isolation test against this project (Phase 1 of
+    PRODUCTION_STEPS.txt). Do not upload real documents before it passes.
+Done when: all migrations applied, RLS verified, isolation test passes.
+
+
+TODO B: BACKEND ON CLOUD RUN (GOOGLE CLOUD)
+-------------------------------------------
+Google Cloud setup
+[ ] Create a Google Cloud project "grimoire-staging" and link a billing
+    account (required for Cloud Run; the free allowance still applies).
+[ ] FIRST: create a budget alert on the billing account (for example
+    $5, with alerts at 50/90/100 percent).
+[ ] Install the gcloud CLI and run "gcloud auth login" and
+    "gcloud config set project <id>".
+[ ] Enable APIs: run, artifactregistry, secretmanager, cloudbuild.
+[ ] Pick one region and use it for everything (the free allowance is
+    priced from us-central1; check that your region is covered). Keep it
+    close to your Supabase region to lower latency.
+[ ] Create an Artifact Registry Docker repo "grimoire".
+
+Image (built once, promoted unchanged to production)
+[ ] Add backend/Dockerfile: Python 3.11+, install the package
+    (backend/pyproject.toml + uv.lock), download both HF models at build
+    time, start uvicorn bound to 0.0.0.0 on $PORT.
+    NOTE: main.py run() hard-codes host 127.0.0.1:8000, which Cloud Run
+    cannot reach. Start uvicorn from the Dockerfile CMD instead of
+    "grimoire-api"; this is a deployment change, not a logic change.
+[ ] Add backend/.dockerignore (.env, .venv, tests, __pycache__).
+[ ] Build with Cloud Build (no local Docker needed) and tag with the git
+    SHA, not only "latest".
+[ ] Optional: test the image locally with Docker before pushing.
+
+Secrets and config
+[ ] Create Secret Manager secrets: supabase-service-role-staging,
+    gemini-api-key-staging.
+[ ] Give the Cloud Run service account the "Secret Manager Secret
+    Accessor" role on those two secrets only.
+[ ] Plain env vars on the service:
+      ENV=production
+      AUTH_MODE=on
+      SUPABASE_URL=<staging project URL>
+      SUPABASE_ANON_KEY=<staging anon key>
+      LLM_MODEL=gemini-4-hydrogen
+      API_CORS_ORIGINS=https://<firebase-staging-site>.web.app
+    No localhost origins and no "*": the backend refuses to start.
+    (If the Firebase URL is not known yet, deploy C first, then set this.)
+
+Deploy
+[ ] Deploy service "grimoire-api-staging" from the image with:
+      memory 4 GiB, CPU 2 (start here; models are loaded in-process),
+      min instances 0, max instances 2 (caps cost and load),
+      concurrency low (for example 4-8), request timeout long enough for
+      ingestion (for example 900 s), allow unauthenticated invocation
+      (the app does its own JWT auth), startup CPU boost on.
+[ ] Check "curl https://<service-url>/health" returns OK. Allow for a
+    cold start on the first call.
+[ ] Check a request without a Bearer token is rejected (auth is on).
+[ ] Test streaming: an answer must stream token by token through Cloud
+    Run (no buffering, no early timeout).
+[ ] Look at the Cloud Run logs for the first start: it must reach
+    "Application startup complete" without config errors.
+[ ] After a day of testing, check Billing > Reports to see how much of
+    the free allowance was used.
+Done when: /health works on the public HTTPS URL from another network and
+a Bearer-authenticated question streams an answer.
+
+
+TODO C: FRONTEND (ANGULAR ON FIREBASE HOSTING)
+----------------------------------------------
+[ ] Create (or reuse) the Firebase project. Add a second hosting site
+    for staging, e.g. grimoire-staging, so production gets its own site.
+[ ] Add frontend-angular/.firebaserc with targets "staging" and
+    "production".
+[ ] Add src/environments/environment.staging.ts with:
+      production: true
+      apiBaseUrl: https://<cloud-run-staging-url>.run.app
+      supabaseUrl: <staging project URL>
+      supabaseAnonKey: <staging anon key>
+[ ] Add a "staging" configuration to angular.json (fileReplacements
+    environment.ts -> environment.staging.ts). Production keeps using
+    environment.prod.ts. This is config only, no app code changes.
+[ ] Install Firebase CLI; run "firebase login".
+[ ] Run "npm ci" then "ng build --configuration staging" in
+    frontend-angular/.
+[ ] Run "firebase deploy --only hosting:staging".
+[ ] Copy the staging URL (https://<site>.web.app). Put it into
+    API_CORS_ORIGINS (B) and the Supabase redirect list (A, E).
+[ ] Open the URL from another device. The app must load and deep links
+    must work (the "**" -> /index.html rewrite exists in firebase.json).
+Done when: the site loads on a phone and calls the staging API with no
+CORS errors.
+
+
+TODO D: GEMINI
+--------------
+[ ] Create a separate Gemini API key for staging (not the dev key).
+[ ] Put it in Secret Manager only (secret "gemini-api-key-staging").
+[ ] Set a budget alert or spend cap on the linked Google Cloud billing
+    account.
+[ ] Confirm LLM_MODEL=gemini-4-hydrogen is available to this key.
+[ ] Check how Google uses staging data under your plan (do not use real
+    private documents in staging until checked).
+Done when: one question through the staging app returns a streamed
+answer.
+
+
+TODO E: GOOGLE LOGIN (OAuth)
+----------------------------
+[ ] In Google Cloud console create an OAuth client (type Web) for
+    staging. Basic scopes only: openid, email, profile.
+[ ] Add the Supabase callback URL
+    https://<staging-ref>.supabase.co/auth/v1/callback as an Authorized
+    redirect URI.
+[ ] Paste the client ID and secret into Supabase > Auth > Providers >
+    Google (staging project).
+[ ] Set the consent screen to "In production", or add your test users
+    while it is in Testing.
+[ ] In Supabase > Auth > URL configuration, add the Firebase staging URL
+    as Site URL and Redirect URL.
+[ ] Test sign-in from a different device and browser.
+Done when: a Google sign-in on the Firebase staging URL lands back in the
+app with a session.
+
+
+END-TO-END CHECK (WITH YOUR OWN LAPTOP CLOSED)
+----------------------------------------------
+[ ] Shut down every laptop.
+[ ] From a phone on mobile data: open the staging URL (allow for a cold
+    start on the first request), sign in with
+    Google, upload a PDF, wait for it to be ready, ask a question,
+    see the streamed answer, open a citation.
+[ ] With a second Google account: confirm it cannot see the first
+    account's documents.
+[ ] Leave it idle overnight; next morning confirm the app still works
+    and check Cloud Run usage against the free allowance.
+Done when: all of the above works with every laptop off.
+
+
+GOING TO PRODUCTION (CONNECTIONS ONLY)
+--------------------------------------
+Nothing in this list changes code logic.
+  Part  Staging                      Production
+  ----  ---------------------------  ----------------------------------
+  A     Supabase "staging"           Supabase "prod": run the same
+                                     migrations, same OAuth setup
+  B     Cloud Run staging service,   Cloud Run prod service, same image,
+        min instances 0              same env var names, prod secrets in
+                                     Secret Manager, min instances 1
+  C     Firebase staging site        Firebase prod site;
+                                     "ng build --configuration
+                                     production" with prod values
+  D     staging Gemini key           prod Gemini key (new, separate)
+  E     staging OAuth client         prod OAuth client + prod redirect
+                                     URIs
+[ ] Promote the SAME image tag (do not rebuild).
+[ ] Set API_CORS_ORIGINS to the production frontend origin only.
+[ ] Raise Cloud Run min instances to 1 (the paid upgrade) and consider
+    more memory/CPU if latency or memory demands it.
+[ ] Re-run the isolation test and the end-to-end check on production.
+
+
+KNOWN GAPS FOUND IN THE REPO (FIX BEFORE STAGING)
+-------------------------------------------------
+- No Dockerfile exists yet (TODO B).
+- main.py run() binds 127.0.0.1:8000; container start must set host and
+  port (TODO B).
+- environment.prod.ts has a placeholder API URL and empty Supabase
+  values; per-environment Angular config is needed (TODO C).
+- .gitignore contains unresolved merge conflict markers (<<<<<<< HEAD).
+  Fix it so .env and .venv stay ignored before you commit anything.
+- Embedding and reranker models are loaded in-process, so the Cloud Run
+  instance needs enough memory (start at 4 GiB, 2 vCPU) and the first
+  request after idle is slow (cold start).
+- Ingestion runs inside the upload request (no background task), so it
+  needs a long Cloud Run request timeout until Phase 5 moves it to a Job.

@@ -55,28 +55,28 @@ Code implementation is prepared: Angular Google sign-in, Bearer-token
 validation, AUTH_MODE enforcement, per-user document IDs, and the RLS/storage
 migration. These checklist items remain open until the migration is applied
 and verified in staging; do not ingest real data before that verification.
-[ ] Enable the Google provider in Supabase Auth.
-[ ] Set the Google OAuth consent screen to "In production"
+[O] Enable the Google provider in Supabase Auth.
+[O] Set the Google OAuth consent screen to "In production"
     (basic scopes only: openid, email, profile).
-[ ] Frontend signs in with Google and sends the JWT as
+[O] Frontend signs in with Google and sends the JWT as
     "Authorization: Bearer".
-[ ] FastAPI verifies the JWT on every request except GET /health.
-[ ] Add a profiles table with role: user or admin. No other roles.
-[ ] Add AUTH_MODE=off|on. With off, treat every request as one fixed
+[O] FastAPI verifies the JWT on every request except GET /health.
+[O] Add a profiles table with role: user or admin. No other roles.
+[O] Add AUTH_MODE=off|on. With off, treat every request as one fixed
     dev user. The backend must refuse to start with AUTH_MODE=off when
     ENV=production.
-[ ] Add a documents table (id, user_id, sha256, filename, storage_path,
+[O] Add a documents table (id, user_id, sha256, filename, storage_path,
     status, error, page_count, created_at).
-[ ] FIX BEFORE INGESTING REAL DATA: derive the document ID from
+[O] FIX BEFORE INGESTING REAL DATA: derive the document ID from
     user_id + sha256, with a unique constraint on (user_id, sha256).
     Today the ID comes from the hash alone, so two users uploading the
     same PDF would collide and one could learn the other has that file.
-[ ] Add user_id to conversations and document_chunks.
-[ ] Enable RLS on every table, with policies tied to user_id.
-[ ] Backend queries Supabase as the user (their JWT) so RLS applies.
+[O] Add user_id to conversations and document_chunks.
+[O] Enable RLS on every table, with policies tied to user_id.
+[O] Backend queries Supabase as the user (their JWT) so RLS applies.
     Vector search becomes an RPC function that respects RLS. The
     service-role key is used only for background ingestion.
-[ ] Store PDFs in Supabase Storage under a user_id path prefix, with
+[O] Store PDFs in Supabase Storage under a user_id path prefix, with
     storage policies.
 Done when: an automated test proves user A cannot read user B's
 documents, chunks, conversations, messages, or PDF files.
